@@ -1,0 +1,71 @@
+{
+  "$comment": "Taxonomie unique de webpool (US-05). Config de départ orientée sources visuelles (héritage image-sources-rater) — à faire évoluer librement : le classifieur resynchronise themes/facettes en base à chaque exécution.",
+  "themes": [
+    {
+      "slug": "photographie",
+      "label": "Photographie",
+      "keywords": ["photo", "photograph", "flickr", "unsplash", "pexels", "500px", "camera"],
+      "children": [
+        { "slug": "banque-images", "label": "Banques d'images", "keywords": ["stock", "unsplash", "pexels", "pixabay", "shutterstock", "banque d'images"] },
+        { "slug": "photo-voyage", "label": "Photo de voyage", "keywords": ["travel", "voyage", "landscape", "paysage"] }
+      ]
+    },
+    {
+      "slug": "illustration",
+      "label": "Illustration & dessin",
+      "keywords": ["illustration", "artstation", "deviantart", "behance", "dribbble", "concept art", "sketch"],
+      "children": [
+        { "slug": "concept-art", "label": "Concept art", "keywords": ["concept art", "artstation", "environment design"] },
+        { "slug": "vector", "label": "Vectoriel", "keywords": ["vector", "svg", "vecteezy", "flaticon"] }
+      ]
+    },
+    {
+      "slug": "ia-generative",
+      "label": "IA générative",
+      "keywords": ["stable diffusion", "midjourney", "comfyui", "lora", "prompt", "civitai", "flux", "diffusion model"],
+      "children": [
+        { "slug": "lora-training", "label": "Entraînement LoRA", "keywords": ["lora training", "kohya", "dreambooth", "fine-tuning", "dataset"] },
+        { "slug": "prompting", "label": "Prompting", "keywords": ["prompt guide", "prompt engineering", "prompts"] }
+      ]
+    },
+    {
+      "slug": "design",
+      "label": "Design & UI",
+      "keywords": ["design", "ui", "ux", "typography", "typographie", "palette", "figma", "moodboard"],
+      "children": [
+        { "slug": "inspiration", "label": "Inspiration", "keywords": ["inspiration", "gallery", "showcase", "awwwards", "moodboard"] }
+      ]
+    },
+    {
+      "slug": "patrimoine",
+      "label": "Patrimoine & archives",
+      "keywords": ["europeana", "archive", "museum", "musée", "heritage", "gallica", "public domain", "domaine public"]
+    }
+  ],
+  "facets": [
+    {
+      "slug": "content-type",
+      "label": "Type de contenu",
+      "values": [
+        { "value": "video", "patterns": ["youtube.com", "vimeo.com", "youtu.be"] },
+        { "value": "outil", "patterns": ["github.com", "gitlab.com", "app.", "tool"] },
+        { "value": "galerie", "patterns": ["gallery", "galerie", "flickr.com", "artstation.com", "behance.net"] },
+        { "value": "tutoriel", "patterns": ["tutorial", "tuto", "how-to", "guide", "docs."] },
+        { "value": "article", "patterns": [] }
+      ]
+    },
+    {
+      "slug": "licence",
+      "label": "Licence présumée",
+      "values": [
+        { "value": "libre", "patterns": ["creative commons", "public domain", "domaine public", "cc0", "unsplash", "pexels", "pixabay", "openverse"] },
+        { "value": "commerciale", "patterns": ["shutterstock", "gettyimages", "istockphoto", "adobe stock"] },
+        { "value": "inconnue", "patterns": [] }
+      ]
+    }
+  ],
+  "quality_domains": [
+    "unsplash.com", "pexels.com", "flickr.com", "europeana.eu", "gallica.bnf.fr",
+    "artstation.com", "behance.net", "github.com", "civitai.com"
+  ]
+}
