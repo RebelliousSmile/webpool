@@ -1,0 +1,11 @@
+{
+  "results": [
+    { "url": "https://www.unsplash.com/s/photos/forest?utm_source=test&utm_medium=serp", "title": "Forest photos — Unsplash" },
+    { "url": "https://unsplash.com/s/photos/forest", "title": "Forest photos — Unsplash" },
+    { "url": "https://civitai.com/models?query=forest+lora&fbclid=abc123", "title": "Forest LoRA models — Civitai" },
+    { "url": "https://github.com/kohya-ss/sd-scripts", "title": "kohya-ss/sd-scripts: LoRA training scripts" },
+    { "url": "https://example.com/lora-training-guide/?utm_campaign=x#intro", "title": "LoRA training guide" },
+    { "url": "https://www.youtube.com/watch?v=abc&si=tracking", "title": "LoRA training tutorial video" },
+    { "url": "https://europeana.eu/en/collections/topic/190-art", "title": "Art — Europeana" }
+  ]
+}
