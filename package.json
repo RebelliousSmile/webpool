@@ -1,0 +1,26 @@
+{
+  "name": "webpool",
+  "version": "0.1.0",
+  "description": "Corpus d'URLs normalisées, classées par taxonomie, restituées en pools matérialisés (PostgreSQL).",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "webpool": "bin/webpool.js"
+  },
+  "scripts": {
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v && docker compose up -d",
+    "webpool": "node bin/webpool.js",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  }
+}
