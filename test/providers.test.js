@@ -1,4 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import { providers } from '../src/ingest/index.js';
+import * as brave from '../src/ingest/providers/brave.js';
+import * as searxng from '../src/ingest/providers/searxng.js';
+import * as europeana from '../src/ingest/providers/europeana.js';
+import * as flickr from '../src/ingest/providers/flickr.js';
+import { config } from '../src/config.js';
 import { normalizeResults } from '../src/ingest/providers/file.js';
 
 describe('provider file — normalizeResults', () => {
@@ -19,5 +26,83 @@ describe('provider file — normalizeResults', () => {
 
   it('rejette les formats inattendus', () => {
     expect(() => normalizeResults({ nope: [] })).toThrow(/Format inattendu/);
+  });
+});
+
+// US-11 — mapping des réponses et construction des requêtes de chaque provider.
+const fixture = (name) => JSON.parse(fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
+const jsonResponse = (body, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+
+describe('providers SERP — contrat {url, rank, title}', () => {
+  it('sont tous enregistrés derrière la même abstraction', () => {
+    expect(Object.keys(providers).sort()).toEqual(['brave', 'europeana', 'file', 'flickr', 'searxng']);
+    for (const impl of Object.values(providers)) expect(typeof impl.search).toBe('function');
+  });
+
+  it('brave : mappe web.results', () => {
+    expect(brave.mapResponse(fixture('brave-response.json'))).toEqual([
+      { url: 'https://civitai.com/models/1', rank: 1, title: 'Forest LoRA — Civitai' },
+      { url: 'https://example.com/no-title', rank: 2, title: null },
+    ]);
+    expect(brave.buildUrl('a b', 50).searchParams.get('count')).toBe('20');
+  });
+
+  it('searxng : ignore les entrées sans url, respecte limit, force format=json', () => {
+    const data = fixture('searxng-response.json');
+    expect(searxng.mapResponse(data).map((r) => r.url)).toEqual([
+      'https://civitai.com/models/1',
+      'https://example.com/a',
+      'https://example.com/b',
+    ]);
+    expect(searxng.mapResponse(data, 2)).toHaveLength(2);
+    const url = searxng.buildUrl('http://localhost:8080', 'forest lora');
+    expect(url.toString()).toBe('http://localhost:8080/search?q=forest+lora&format=json');
+    expect(searxng.buildUrl('https://s.example/sub/', 'x').pathname).toBe('/sub/search');
+  });
+
+  it('europeana : URL item depuis id, titre tableau ou chaîne, ignore sans id', () => {
+    expect(europeana.mapResponse(fixture('europeana-response.json'))).toEqual([
+      { url: 'https://www.europeana.eu/item/2048128/Athena_Plus_ProvidedCHO_1', rank: 1, title: 'La forêt de Fontainebleau' },
+      { url: 'https://www.europeana.eu/item/9200/BibliographicResource_2', rank: 2, title: 'Titre simple' },
+    ]);
+    const url = europeana.buildUrl('forêt', 'KEY', 500);
+    expect(url.searchParams.get('wskey')).toBe('KEY');
+    expect(url.searchParams.get('rows')).toBe('100');
+  });
+
+  it('flickr : URL de page photo, titre vide → null, erreur API → exception', () => {
+    expect(flickr.mapResponse(fixture('flickr-response.json'))).toEqual([
+      { url: 'https://www.flickr.com/photos/12345678@N00/53000001', rank: 1, title: 'Sous-bois en automne' },
+      { url: 'https://www.flickr.com/photos/87654321@N00/53000002', rank: 2, title: null },
+    ]);
+    expect(() => flickr.mapResponse(fixture('flickr-error.json'))).toThrow(/Invalid API Key.*100/);
+    expect(flickr.buildUrl('x', 'K').searchParams.get('nojsoncallback')).toBe('1');
+  });
+
+  it('search : appelle fetch avec la clé et mappe le résultat', async () => {
+    config.braveApiKey = 'BK';
+    let seen;
+    const res = await brave.search(
+      { query: 'q' },
+      { fetchImpl: async (url, init) => ((seen = init), jsonResponse(fixture('brave-response.json'))) },
+    );
+    expect(seen.headers['X-Subscription-Token']).toBe('BK');
+    expect(res).toHaveLength(2);
+  });
+
+  it('search : clé ou URL absente → message explicite, erreur HTTP → message lisible', async () => {
+    config.europeanaApiKey = '';
+    await expect(europeana.search({ query: 'q' })).rejects.toThrow(/EUROPEANA_API_KEY manquante/);
+    config.searxngUrl = '';
+    await expect(searxng.search({ query: 'q' })).rejects.toThrow(/SEARXNG_URL manquante/);
+    config.flickrApiKey = 'K';
+    await expect(
+      flickr.search({ query: 'q' }, { fetchImpl: async () => jsonResponse({}, 429) }),
+    ).rejects.toThrow(/Flickr : HTTP 429 \(quota dépassé/);
+    config.braveApiKey = 'BK';
+    await expect(
+      brave.search({ query: 'q' }, { fetchImpl: async () => jsonResponse({}, 401) }),
+    ).rejects.toThrow(/Brave Search : HTTP 401 \(clé API refusée\)/);
   });
 });

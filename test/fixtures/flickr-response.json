@@ -1,0 +1,4 @@
+{ "photos": { "page": 1, "photo": [
+  { "id": "53000001", "owner": "12345678@N00", "title": "Sous-bois en automne" },
+  { "id": "53000002", "owner": "87654321@N00", "title": "  " }
+] }, "stat": "ok" }

@@ -2,8 +2,17 @@ import { query, withTransaction } from '../db.js';
 import { startRun, finishRun } from '../run.js';
 import * as fileProvider from './providers/file.js';
 import * as braveProvider from './providers/brave.js';
+import * as searxngProvider from './providers/searxng.js';
+import * as europeanaProvider from './providers/europeana.js';
+import * as flickrProvider from './providers/flickr.js';
 
-const providers = { file: fileProvider, brave: braveProvider };
+export const providers = {
+  file: fileProvider,
+  brave: braveProvider,
+  searxng: searxngProvider,
+  europeana: europeanaProvider,
+  flickr: flickrProvider,
+};
 
 // US-03 : chaque URL candidate est insérée (ou retrouvée) dans url_item, et sa
 // découverte tracée dans url_source (provider, requête, rang, date, run).

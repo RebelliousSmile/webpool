@@ -11,7 +11,7 @@ import { formatPool } from '../src/pools/export.js';
 const HELP = `webpool — pipeline d'URLs : ingestion, normalisation, classification, pools
 
 Usage :
-  webpool ingest --query "…" [--provider file|brave] [--input results.json] [--limit N]
+  webpool ingest --query "…" [--provider file|brave|searxng|europeana|flickr] [--input results.json] [--limit N]
   webpool normalize [--limit N] [--offline]
   webpool classify [--limit N] [--all]
   webpool pool create --slug <slug> [--label "…"] --file definition.json
