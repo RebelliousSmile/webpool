@@ -10,20 +10,35 @@ function countHits(haystack, keywords) {
   return hits;
 }
 
-function scoreThemes(haystack, themes) {
+// US-08 : le contenu propre de l'URL (url, domaine, titre) pèse plein pot ; les
+// requêtes qui l'ont découverte ne comptent que pour QUERY_WEIGHT, afin qu'une
+// URL n'hérite pas mécaniquement du thème de sa requête.
+export const QUERY_WEIGHT = 0.25;
+
+function weightedHits({ own, query }, keywords) {
+  return countHits(own, keywords) + QUERY_WEIGHT * countHits(query, keywords);
+}
+
+function scoreThemes(text, themes) {
   return themes.map((theme) => {
     const children = (theme.children ?? []).map((child) => ({
       slug: child.slug,
-      score: countHits(haystack, child.keywords),
+      score: weightedHits(text, child.keywords),
     }));
     const childScore = children.reduce((sum, c) => sum + c.score, 0);
     return {
       slug: theme.slug,
-      ownScore: countHits(haystack, theme.keywords),
-      score: countHits(haystack, theme.keywords) + childScore * 0.5,
+      ownScore: countHits(text.own, theme.keywords),
+      score: weightedHits(text, theme.keywords) + childScore * 0.5,
       children,
     };
   });
+}
+
+// Départage déterministe, indépendant de l'ordre de déclaration de la taxonomie :
+// score, puis score issu du contenu propre, puis slug.
+function compareThemes(a, b) {
+  return b.score - a.score || b.ownScore - a.ownScore || a.slug.localeCompare(b.slug);
 }
 
 function pickFacets(haystack, facets) {
@@ -76,12 +91,12 @@ function qualityScore({ canonicalUrl, domain, title }, taxonomy) {
 const round3 = (n) => Math.round(n * 1000) / 1000;
 
 export function classifyItem({ canonicalUrl, domain, title, queries }, taxonomy) {
-  const haystack = [canonicalUrl, domain, title ?? '', ...(queries ?? [])]
-    .join(' ')
-    .toLowerCase();
+  const own = [canonicalUrl, domain, title ?? ''].join(' ').toLowerCase();
+  const queryText = (queries ?? []).join(' ').toLowerCase();
+  const haystack = `${own} ${queryText}`;
 
-  const scored = scoreThemes(haystack, taxonomy.themes ?? []);
-  const ranked = [...scored].sort((a, b) => b.score - a.score);
+  const scored = scoreThemes({ own, query: queryText }, taxonomy.themes ?? []);
+  const ranked = [...scored].sort(compareThemes);
   const best = ranked[0];
   const second = ranked[1];
 

@@ -95,4 +95,50 @@ describe('classifyItem', () => {
     expect(res.scores.confidence).toBe(1);
     expect(res.scores.quality).toBeGreaterThan(0.5);
   });
+
+  describe('biais des requêtes sources (US-08)', () => {
+    const heritage = {
+      ...taxonomy,
+      themes: [
+        ...taxonomy.themes,
+        { slug: 'patrimoine', label: 'Patrimoine', keywords: ['europeana', 'museum'], children: [] },
+      ],
+    };
+    const europeana = {
+      canonicalUrl: 'https://europeana.eu/en/collections/topic/190-art',
+      domain: 'europeana.eu',
+      title: 'Art — Europeana',
+      queries: ['forest lora'],
+    };
+
+    it('le contenu propre prime sur la requête (cas Europeana)', () => {
+      expect(classifyItem(europeana, heritage).primary).toBe('patrimoine');
+    });
+
+    it("le résultat ne dépend pas de l'ordre de déclaration de la taxonomie", () => {
+      const reversed = { ...heritage, themes: [...heritage.themes].reverse() };
+      expect(classifyItem(europeana, reversed).primary).toBe('patrimoine');
+    });
+
+    it('une égalité parfaite est départagée par slug, pas par ordre de déclaration', () => {
+      const tie = {
+        canonicalUrl: 'https://x.org/',
+        domain: 'x.org',
+        title: 'lora museum',
+        queries: [],
+      };
+      const a = classifyItem(tie, heritage).primary;
+      const b = classifyItem(tie, { ...heritage, themes: [...heritage.themes].reverse() }).primary;
+      expect(a).toBe(b);
+      expect(a).toBe('ia-generative');
+    });
+
+    it('une requête seule suffit encore à thématiser une URL sans indice propre', () => {
+      const res = classifyItem(
+        { canonicalUrl: 'https://x.org/a', domain: 'x.org', title: null, queries: ['stable diffusion'] },
+        taxonomy,
+      );
+      expect(res.primary).toBe('ia-generative');
+    });
+  });
 });
