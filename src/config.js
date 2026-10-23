@@ -15,5 +15,10 @@ export const config = {
   braveApiKey: process.env.BRAVE_API_KEY ?? '',
   taxonomyPath: process.env.WEBPOOL_TAXONOMY ?? path.join(rootDir, 'config', 'taxonomy.json'),
   fetchTimeoutMs: Number(process.env.WEBPOOL_FETCH_TIMEOUT_MS ?? 10000),
+  hostDelayMs: Number(process.env.WEBPOOL_HOST_DELAY_MS ?? 1000),
+  fetchRetries: Number(process.env.WEBPOOL_FETCH_RETRIES ?? 2),
+  fetchBackoffMs: Number(process.env.WEBPOOL_FETCH_BACKOFF_MS ?? 500),
+  maxBodyBytes: Number(process.env.WEBPOOL_MAX_BODY_BYTES ?? 262144),
+  concurrency: Number(process.env.WEBPOOL_CONCURRENCY ?? 4),
   userAgent: 'webpool/0.1 (+https://github.com/RebelliousSmile/webpool)',
 };
