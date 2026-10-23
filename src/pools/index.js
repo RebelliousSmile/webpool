@@ -70,3 +70,13 @@ export async function showPool(slug) {
   );
   return rows;
 }
+
+// US-12 : pool + éléments dans l'ordre de rang, pour l'export.
+export async function loadPoolForExport(slug) {
+  const { rows } = await query(
+    'SELECT slug, label, definition, refreshed_at FROM pool WHERE slug = $1',
+    [slug],
+  );
+  if (rows.length === 0) throw new Error(`Pool inconnu : ${slug}`);
+  return { pool: rows[0], items: await showPool(slug) };
+}

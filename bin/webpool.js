@@ -4,7 +4,9 @@ import { closePool, query } from '../src/db.js';
 import { ingest } from '../src/ingest/index.js';
 import { normalizePending } from '../src/normalize/index.js';
 import { classifyPending } from '../src/classify/index.js';
-import { createPool, refreshPool, listPools, showPool } from '../src/pools/index.js';
+import fs from 'node:fs';
+import { createPool, refreshPool, listPools, showPool, loadPoolForExport } from '../src/pools/index.js';
+import { formatPool } from '../src/pools/export.js';
 
 const HELP = `webpool — pipeline d'URLs : ingestion, normalisation, classification, pools
 
@@ -15,6 +17,7 @@ Usage :
   webpool pool create --slug <slug> [--label "…"] --file definition.json
   webpool pool refresh --slug <slug>
   webpool pool show --slug <slug>
+  webpool pool export --slug <slug> [--format json|csv|md] [--out fichier]
   webpool pool list
   webpool stats
 `;
@@ -29,6 +32,8 @@ const OPTIONS = {
   slug: { type: 'string' },
   label: { type: 'string' },
   file: { type: 'string' },
+  format: { type: 'string', default: 'json' },
+  out: { type: 'string' },
   help: { type: 'boolean', short: 'h', default: false },
 };
 
@@ -100,6 +105,11 @@ async function main() {
           console.log(`${String(r.rank).padStart(3)}  ${Number(r.score).toFixed(3)}  ${r.canonical_url}`);
         }
         if (rows.length === 0) console.log('(pool vide — lancer pool refresh)');
+      } else if (subcommand === 'export') {
+        if (!values.slug) throw new Error('pool export : --slug requis');
+        const output = formatPool(await loadPoolForExport(values.slug), values.format);
+        if (values.out) fs.writeFileSync(values.out, output);
+        else process.stdout.write(output);
       } else if (subcommand === 'list') {
         const pools = await listPools();
         for (const p of pools) {
