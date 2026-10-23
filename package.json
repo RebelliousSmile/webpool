@@ -12,7 +12,8 @@
     "db:down": "docker compose down",
     "db:reset": "docker compose down -v && docker compose up -d",
     "webpool": "node bin/webpool.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.js"
   },
   "engines": {
     "node": ">=22"
