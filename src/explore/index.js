@@ -239,9 +239,9 @@ export async function explore({
           ? nextState({ provider: q.provider, page, newUrls: res.inserted, dryRuns, dryRunsLimit })
           : { nextPage: page, dryRuns, exhausted: false };
         await query(
-          `INSERT INTO search_query_run (search_query_id, page, results, new_urls, new_domains, run_id)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [q.id, runPage, res.total, res.inserted, res.newDomains, runId],
+          `INSERT INTO search_query_run (search_query_id, page, results, new_urls, new_domains, run_id, ingest_run_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [q.id, runPage, res.total, res.inserted, res.newDomains, runId, res.runId],
         );
         await query(
           `UPDATE search_query

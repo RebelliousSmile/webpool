@@ -76,7 +76,7 @@ export async function ingest({ provider = 'file', searchQuery, sentQuery, exclud
         [urls.map((u) => idByUrl.get(u)), results.map((r) => r.rank ?? null), provider, searchQuery, runId],
       );
       // Un domaine n'est nouveau qu'une fois : la première requête le garde.
-      newDomains = (await registerDomains(client, urls.map(offlineDomain), searchQuery)).length;
+      newDomains = (await registerDomains(client, urls.map(offlineDomain), searchQuery, runId)).length;
     });
     const existing = results.length - inserted;
 

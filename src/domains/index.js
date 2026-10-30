@@ -19,15 +19,16 @@ export function normalizeDomain(raw) {
 }
 
 // Insère les domaines inconnus ; renvoie ceux réellement ajoutés (les nouveaux).
-export async function registerDomains(client, domains, firstQuery = null) {
+// `runId` : run ingest qui les a trouvés, pour relier un domaine à son appel.
+export async function registerDomains(client, domains, firstQuery = null, runId = null) {
   const unique = [...new Set(domains.filter(Boolean))];
   if (unique.length === 0) return [];
   const { rows } = await client.query(
-    `INSERT INTO domain_profile (domain, first_query)
-     SELECT d, $2 FROM unnest($1::text[]) AS d
+    `INSERT INTO domain_profile (domain, first_query, first_run_id)
+     SELECT d, $2, $3 FROM unnest($1::text[]) AS d
      ON CONFLICT (domain) DO NOTHING
      RETURNING domain`,
-    [unique, firstQuery],
+    [unique, firstQuery, runId],
   );
   return rows.map((r) => r.domain);
 }

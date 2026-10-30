@@ -267,4 +267,26 @@ describe.skipIf(!available)('exploration sur PostgreSQL', () => {
       expect(res.queries[0].error).not.toMatch(/repli/);
     });
   });
+
+  it('relie chaque domaine nouveau à l’appel qui l’a trouvé, sans toucher un domaine connu', async () => {
+    await query("INSERT INTO domain_profile (domain, first_query) VALUES ('known.com', 'avant')");
+    const q = await ex.addQuery({
+      provider: 'file',
+      query: pages('link', [['https://n1.com/a', 'https://n2.com/a', 'https://n3.com/a', 'https://known.com/a']]),
+    });
+    await explore({ budget: 1 });
+
+    const [run] = (await query('SELECT ingest_run_id FROM search_query_run WHERE search_query_id = $1', [q.id])).rows;
+    expect(run.ingest_run_id).not.toBeNull();
+    const linked = (
+      await query(
+        `SELECT dp.domain FROM search_query_run r JOIN domain_profile dp ON dp.first_run_id = r.ingest_run_id
+          WHERE r.search_query_id = $1 ORDER BY 1`,
+        [q.id],
+      )
+    ).rows.map((r) => r.domain);
+    expect(linked).toEqual(['n1.com', 'n2.com', 'n3.com']);
+    const known = (await query("SELECT first_run_id, first_query FROM domain_profile WHERE domain = 'known.com'")).rows[0];
+    expect(known).toEqual({ first_run_id: null, first_query: 'avant' });
+  });
 });
