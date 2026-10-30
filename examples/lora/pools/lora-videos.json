@@ -1,0 +1,6 @@
+{
+  "theme": "ia-generative",
+  "facets": { "content-type": "video" },
+  "order": "relevance",
+  "limit": 10
+}

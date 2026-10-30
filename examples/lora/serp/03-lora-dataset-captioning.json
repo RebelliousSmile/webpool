@@ -1,0 +1,10 @@
+{
+  "query": "lora dataset captioning",
+  "results": [
+    { "url": "https://github.com/kohya-ss/sd-scripts#captioning", "title": "kohya-ss/sd-scripts" },
+    { "url": "https://github.com/jhc13/taggui", "title": "jhc13/taggui: tag manager and captioner for image datasets" },
+    { "url": "https://huggingface.co/datasets", "title": "Datasets — Hugging Face" },
+    { "url": "https://example.com/lora-dataset-preparation-tutorial?ref=newsletter", "title": "Preparing a LoRA dataset: captioning tutorial" },
+    { "url": "https://www.lemonde.fr/pixels/", "title": "Pixels — Le Monde" }
+  ]
+}

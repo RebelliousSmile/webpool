@@ -1,0 +1,11 @@
+{
+  "query": "flux lora training",
+  "results": [
+    { "url": "https://github.com/ostris/ai-toolkit", "title": "ostris/ai-toolkit: training toolkit for Flux and SDXL LoRA" },
+    { "url": "https://github.com/Nerogar/OneTrainer", "title": "Nerogar/OneTrainer: one-stop solution for diffusion model training" },
+    { "url": "https://huggingface.co/docs/diffusers/training/dreambooth", "title": "DreamBooth — Diffusers documentation" },
+    { "url": "https://www.github.com/kohya-ss/sd-scripts/", "title": "kohya-ss/sd-scripts" },
+    { "url": "https://example.com/blog/2026/flux/lora/how-to-train-a-flux-lora", "title": "How to train a Flux LoRA: step-by-step tutorial" },
+    { "url": "http://example.org/flux-lora-guide", "title": "Flux LoRA training guide" }
+  ]
+}

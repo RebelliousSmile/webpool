@@ -1,0 +1,7 @@
+{
+  "theme": "photographie",
+  "facets": { "licence": "libre" },
+  "domains_exclude": ["pinterest.com"],
+  "order": "quality",
+  "limit": 20
+}

@@ -1,0 +1,14 @@
+{
+  "query": "forest photos dataset lora",
+  "results": [
+    { "url": "https://unsplash.com/s/photos/forest?utm_source=serp", "title": "Forest photos — Unsplash" },
+    { "url": "https://www.unsplash.com/s/photos/forest/", "title": "Forest photos — Unsplash" },
+    { "url": "https://www.pexels.com/search/forest/", "title": "Forest photos — Pexels" },
+    { "url": "https://pixabay.com/images/search/forest/", "title": "Forest images — Pixabay" },
+    { "url": "https://openverse.org/search/image?q=forest", "title": "Forest — Openverse, Creative Commons images" },
+    { "url": "https://commons.wikimedia.org/wiki/Category:Forests", "title": "Category:Forests — Wikimedia Commons, public domain photos" },
+    { "url": "https://www.flickr.com/search/?text=forest&license=4%2C5%2C9%2C10", "title": "Forest — Flickr, Creative Commons photos" },
+    { "url": "https://www.shutterstock.com/search/forest", "title": "Forest stock photos — Shutterstock" },
+    { "url": "https://www.pinterest.com/search/pins/?q=forest%20photography", "title": "Forest photography — Pinterest" }
+  ]
+}

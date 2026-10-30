@@ -1,0 +1,9 @@
+{
+  "query": "lora training tutorial video",
+  "results": [
+    { "url": "https://www.youtube.com/results?search_query=lora+training+tutorial", "title": "LoRA training tutorial — YouTube" },
+    { "url": "https://www.youtube.com/results?search_query=flux+lora+training&si=trk123", "title": "Flux LoRA training — YouTube" },
+    { "url": "https://vimeo.com/search?q=lora%20training", "title": "LoRA training — Vimeo" },
+    { "url": "https://huggingface.co/docs/diffusers/training/lora#finetuning", "title": "LoRA training — Diffusers documentation" }
+  ]
+}

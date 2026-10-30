@@ -1,0 +1,7 @@
+{
+  "theme": "ia-generative",
+  "subthemes": ["lora-training"],
+  "facets": { "content-type": "outil" },
+  "order": "relevance",
+  "limit": 20
+}

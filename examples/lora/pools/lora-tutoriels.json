@@ -1,0 +1,7 @@
+{
+  "theme": "ia-generative",
+  "facets": { "content-type": "tutoriel" },
+  "min_quality": 0.6,
+  "order": "composite",
+  "limit": 20
+}
