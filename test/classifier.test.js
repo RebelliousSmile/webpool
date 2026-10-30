@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyItem } from '../src/classify/classifier.js';
+import { classifyItem, compileKeyword } from '../src/classify/classifier.js';
 
 const taxonomy = {
   themes: [
@@ -147,6 +147,39 @@ describe('classifyItem', () => {
         taxonomy,
       );
       expect(res.primary).toBe('ia-generative');
+    });
+  });
+
+  describe('écritures CJK', () => {
+    const jp = (title, queries) =>
+      classifyItem(
+        { canonicalUrl: 'https://example.jp/a', domain: 'example.jp', title, queries },
+        taxonomy,
+      );
+
+    it('garde les termes de 2 caractères et les trouve sans espaces', () => {
+      expect(jp('長崎の風景写真', ['長崎 写真 フリー素材']).scores.relevance).toBe(0.667);
+      expect(jp('京都の寺', ['京都 写真素材']).scores.relevance).toBe(0.5);
+    });
+
+    it('reconnaît un mot-clé de la taxonomie au milieu d\'un texte japonais', () => {
+      const tax = { ...taxonomy, themes: [{ slug: 'photo-jp', label: 'Photo', keywords: ['写真'], children: [] }] };
+      const res = classifyItem(
+        { canonicalUrl: 'https://example.jp/a', domain: 'example.jp', title: '長崎の風景写真', queries: [] },
+        tax,
+      );
+      expect(res.primary).toBe('photo-jp');
+    });
+
+    it('garde le début de mot pour le latin et le coréen', () => {
+      expect(compileKeyword('ui').test('build')).toBe(false);
+      expect(compileKeyword('사진').test('풍경사진')).toBe(false);
+      expect(compileKeyword('사진').test('풍경 사진')).toBe(true);
+    });
+
+    it('ignore toujours les termes latins de 2 caractères', () => {
+      expect(jp('de la photo', ['de la photo']).scores.relevance).toBe(1);
+      expect(jp('photo', ['de la photo']).scores.relevance).toBe(1);
     });
   });
 });

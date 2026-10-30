@@ -5,11 +5,16 @@
 // Un mot-clé ne correspond qu'en début de mot (`ui` ne trouve pas `build`,
 // `app.` pas `whatsapp.com`) ; aucune frontière de fin : les mots-clés sont des
 // racines (`photo` trouve `photography`, `tool` trouve `tools`).
+// Le chinois et le japonais s'écrivent sans espaces : un mot-clé qui commence par
+// un caractère han, hiragana ou katakana n'a pas de début de mot à exiger (写真
+// doit être trouvé dans 風景写真). Le coréen sépare ses mots et garde la règle.
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const UNSPACED = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
+const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
 export function compileKeyword(keyword) {
   const kw = keyword.toLowerCase();
-  const start = /^[\p{L}\p{N}]/u.test(kw) ? '(?<![\\p{L}\\p{N}])' : '';
+  const start = /^[\p{L}\p{N}]/u.test(kw) && !UNSPACED.test(kw) ? '(?<![\\p{L}\\p{N}])' : '';
   return new RegExp(start + escapeRegExp(kw), 'u');
 }
 
@@ -87,7 +92,8 @@ function relevanceScore(haystack, queries) {
   const terms = new Set(
     queries
       .flatMap((q) => q.toLowerCase().split(/[^\p{L}\p{N}]+/u))
-      .filter((t) => t.length > 2),
+      // un terme CJK de 2 caractères (長崎, 写真) porte autant de sens qu'un mot latin
+      .filter((t) => t.length > (CJK.test(t) ? 1 : 2)),
   );
   if (terms.size === 0) return 0;
   let matched = 0;
