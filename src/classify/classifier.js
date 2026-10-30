@@ -2,12 +2,31 @@
 // Entrée : une URL normalisée + ses requêtes sources. Sortie : thème principal,
 // sous-thèmes, facettes (une valeur par facette) et scores [0..1].
 
-function countHits(haystack, keywords) {
-  let hits = 0;
-  for (const kw of keywords ?? []) {
-    if (haystack.includes(kw.toLowerCase())) hits += 1;
+// Un mot-clé ne correspond qu'en début de mot (`ui` ne trouve pas `build`,
+// `app.` pas `whatsapp.com`) ; aucune frontière de fin : les mots-clés sont des
+// racines (`photo` trouve `photography`, `tool` trouve `tools`).
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+export function compileKeyword(keyword) {
+  const kw = keyword.toLowerCase();
+  const start = /^[\p{L}\p{N}]/u.test(kw) ? '(?<![\\p{L}\\p{N}])' : '';
+  return new RegExp(start + escapeRegExp(kw), 'u');
+}
+
+// Compilation une fois par liste de la taxonomie, pas à chaque item.
+const compiled = new WeakMap();
+function matchers(keywords) {
+  if (!keywords) return [];
+  let list = compiled.get(keywords);
+  if (!list) {
+    list = keywords.map(compileKeyword);
+    compiled.set(keywords, list);
   }
-  return hits;
+  return list;
+}
+
+function countHits(haystack, keywords) {
+  return matchers(keywords).filter((re) => re.test(haystack)).length;
 }
 
 // US-08 : le contenu propre de l'URL (url, domaine, titre) pèse plein pot ; les
@@ -41,7 +60,9 @@ function compareThemes(a, b) {
   return b.score - a.score || b.ownScore - a.ownScore || a.slug.localeCompare(b.slug);
 }
 
-function pickFacets(haystack, facets) {
+// US-08 : les facettes décrivent l'URL elle-même ; seul son contenu propre
+// (url, domaine, titre) les décide, jamais la requête qui l'a trouvée.
+function pickFacets(own, facets) {
   const result = {};
   for (const facet of facets ?? []) {
     let picked = null;
@@ -51,7 +72,7 @@ function pickFacets(haystack, facets) {
         fallback ??= value;
         continue;
       }
-      if (patterns.some((p) => haystack.includes(p.toLowerCase()))) {
+      if (matchers(patterns).some((re) => re.test(own))) {
         picked = value;
         break;
       }
@@ -71,7 +92,7 @@ function relevanceScore(haystack, queries) {
   if (terms.size === 0) return 0;
   let matched = 0;
   for (const term of terms) {
-    if (haystack.includes(term)) matched += 1;
+    if (compileKeyword(term).test(haystack)) matched += 1;
   }
   return matched / terms.size;
 }
@@ -116,7 +137,7 @@ export function classifyItem({ canonicalUrl, domain, title, queries }, taxonomy)
     primary,
     primaryScore: hasTheme ? best.score : 0,
     subthemes,
-    facets: pickFacets(haystack, taxonomy.facets),
+    facets: pickFacets(own, taxonomy.facets),
     scores: {
       relevance: round3(relevanceScore(haystack, queries ?? [])),
       confidence: round3(confidence),
