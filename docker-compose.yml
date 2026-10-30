@@ -8,8 +8,10 @@ services:
       POSTGRES_DB: webpool
       POSTGRES_USER: webpool
       POSTGRES_PASSWORD: webpool
+    # boucle locale seulement, IPv4 et IPv6 : "localhost" peut résoudre vers ::1
     ports:
-      - "${WEBPOOL_DB_PORT:-5432}:5432"
+      - "127.0.0.1:${WEBPOOL_DB_PORT:-5432}:5432"
+      - "[::1]:${WEBPOOL_DB_PORT:-5432}:5432"
     volumes:
       - ./db/init:/docker-entrypoint-initdb.d:ro
       - webpool_pgdata:/var/lib/postgresql/data

@@ -5,6 +5,7 @@
   "description": "Corpus d'URLs normalisées, classées par taxonomie, restituées en pools matérialisés (PostgreSQL).",
   "type": "module",
   "private": true,
+  "packageManager": "pnpm@10.5.2",
   "bin": {
     "webpool": "bin/webpool.js"
   },

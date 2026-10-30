@@ -2,10 +2,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import pg from 'pg';
+// Jamais src/config.js ici : ce module est importé par setup.js avant que DATABASE_URL
+// ne pointe sur le schéma jetable, et figerait config.databaseUrl sur le schéma réel.
+import { defaultDatabaseUrl, loadDotEnv } from '../../src/env.js';
 
-const DEFAULT_URL = 'postgres://webpool:webpool@localhost:5432/webpool';
+loadDotEnv();
 // URL d'origine, mémorisée avant que setup.js ne redirige DATABASE_URL vers le schéma jetable.
-process.env.WEBPOOL_IT_BASE_URL ??= process.env.DATABASE_URL ?? DEFAULT_URL;
+process.env.WEBPOOL_IT_BASE_URL ??= process.env.DATABASE_URL ?? defaultDatabaseUrl();
 process.env.WEBPOOL_IT_SCHEMA ??= `webpool_it_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 export const BASE_URL = process.env.WEBPOOL_IT_BASE_URL;
@@ -25,6 +28,11 @@ async function withAdminClient(fn) {
   } finally {
     await client.end();
   }
+}
+
+// En CI (ou WEBPOOL_IT_REQUIRED défini), une base injoignable fait échouer la suite.
+export function dbRequired(env = process.env) {
+  return Boolean(env.CI || env.WEBPOOL_IT_REQUIRED);
 }
 
 export async function dbAvailable() {
@@ -51,6 +59,10 @@ export async function dropSchema() {
 
 // Remise à zéro entre les tests (schéma conservé, séquences réinitialisées).
 export async function resetData(query) {
+  const { rows } = await query('SELECT current_schema() AS schema');
+  if (rows[0]?.schema !== SCHEMA) {
+    throw new Error(`resetData refusé : schéma courant "${rows[0]?.schema}", attendu "${SCHEMA}"`);
+  }
   await query(
     `TRUNCATE pool_item, pool, url_facet_value, facet_definition, url_theme, theme,
               url_source, url_item, processing_run RESTART IDENTITY CASCADE`,

@@ -165,9 +165,15 @@ pnpm db:up
 pnpm test:integration   # couches DB (ingest, normalize, classify, pools)
 ```
 
-La suite d'intégration utilise le PostgreSQL docker local (`DATABASE_URL`) dans un
-schéma jetable créé puis supprimé par fichier de test, remis à zéro entre les tests ;
-elle est ignorée avec un avertissement si la base est injoignable.
+La suite d'intégration utilise le PostgreSQL docker local dans un schéma jetable créé
+puis supprimé par fichier de test, remis à zéro entre les tests. Elle charge `.env` et
+calcule la même URL que le CLI (`DATABASE_URL`, sinon `localhost:${WEBPOOL_DB_PORT:-5432}`).
+
+Sur un poste, elle est ignorée avec un avertissement si la base est injoignable.
+`WEBPOOL_IT_REQUIRED=1` la rend obligatoire : une base injoignable fait alors échouer
+la commande. La CI GitHub Actions (`.github/workflows/ci.yml`, Node 22 et 24, service
+`postgres:17-alpine`) la rend obligatoire d'office et exécute les deux suites à chaque
+push et pull request.
 
 ## Licence
 

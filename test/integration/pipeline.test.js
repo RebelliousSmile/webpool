@@ -1,8 +1,11 @@
 import fs from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createSchema, dbAvailable, dropSchema, resetData, writeTempJson } from './helpers.js';
+import { createSchema, dbAvailable, dbRequired, dropSchema, resetData, writeTempJson } from './helpers.js';
 
 const available = await dbAvailable();
+if (!available && dbRequired()) {
+  throw new Error('[integration] PostgreSQL injoignable alors que la suite est requise (CI ou WEBPOOL_IT_REQUIRED).');
+}
 if (!available) {
   console.warn('[integration] PostgreSQL injoignable : suite ignorée (pnpm db:up pour la lancer).');
 }
