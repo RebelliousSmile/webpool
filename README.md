@@ -146,6 +146,11 @@ borne la concurrence entre hôtes. Réglages dans `.env` : `WEBPOOL_HOST_DELAY_M
 `WEBPOOL_CONCURRENCY`, `WEBPOOL_FETCH_TIMEOUT_MS`. Une réponse 4xx/5xx place l'URL
 en statut `error` (avec son code HTTP) sans interrompre le run.
 
+Les URL sont traitées par blocs de `WEBPOOL_NORMALIZE_CHUNK` (défaut 100) : réseau
+du bloc, puis écriture, puis bloc suivant. La mémoire reste bornée et un bloc écrit
+est conservé si un bloc suivant échoue. L'ingest, la classification et le refresh
+d'un pool écrivent chacun leur lot en quelques requêtes groupées.
+
 Les URL visitées viennent de l'extérieur : avant chaque requête, l'hôte est résolu
 et refusé (`error` : « hôte refusé ») si une de ses adresses n'est pas publique —
 loopback, plages privées, link-local et métadonnées cloud (`169.254.169.254`),

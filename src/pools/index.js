@@ -30,12 +30,13 @@ export async function refreshPool(slug) {
 
     await withTransaction(async (client) => {
       await client.query('DELETE FROM pool_item WHERE pool_id = $1', [pool.id]);
-      for (const [i, row] of selected.entries()) {
-        await client.query(
-          `INSERT INTO pool_item (pool_id, url_item_id, rank, score) VALUES ($1, $2, $3, $4)`,
-          [pool.id, row.id, i + 1, row.pool_score],
-        );
-      }
+      // Le rang est la position dans la sélection (WITH ORDINALITY), en une requête.
+      await client.query(
+        `INSERT INTO pool_item (pool_id, url_item_id, rank, score)
+         SELECT $1, t.id, t.rank, t.score
+           FROM unnest($2::bigint[], $3::numeric[]) WITH ORDINALITY AS t(id, score, rank)`,
+        [pool.id, selected.map((r) => r.id), selected.map((r) => r.pool_score)],
+      );
       await client.query(
         'UPDATE pool SET refreshed_at = now(), refresh_run_id = $2 WHERE id = $1',
         [pool.id, runId],

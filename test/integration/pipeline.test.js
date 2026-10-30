@@ -69,6 +69,24 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
       ]);
     });
 
+    it('insère un lot en écritures groupées : 50 résultats dont 10 connus', async () => {
+      const urls = Array.from({ length: 50 }, (_, i) => `https://lot.example/${i}`);
+      await ingestUrls(urls.slice(0, 10), 'avant');
+      const res = await ingestUrls(urls, 'lot');
+      expect(res).toMatchObject({ inserted: 40, existing: 10, total: 50 });
+      expect(await count('url_item')).toBe(50);
+      expect(await count('url_source', "query = 'lot'")).toBe(50);
+      const { rows } = await query(`SELECT serp_rank FROM url_source WHERE query = 'lot' ORDER BY serp_rank`);
+      expect(rows.map((r) => r.serp_rank)).toEqual(urls.map((_, i) => i + 1));
+    });
+
+    it('une URL répétée dans la SERP donne un item et deux sources', async () => {
+      const res = await ingestUrls(['https://a.com/x', 'https://a.com/x']);
+      expect(res).toMatchObject({ inserted: 1, existing: 1, total: 2 });
+      expect(await count('url_item')).toBe(1);
+      expect(await count('url_source')).toBe(2);
+    });
+
     it("rejette un provider inconnu et une requête manquante sans créer de run", async () => {
       await expect(ingest({ provider: 'nope', searchQuery: 'q' })).rejects.toThrow(/Provider inconnu/);
       await expect(ingest({ provider: 'file' })).rejects.toThrow(/--query/);
@@ -155,6 +173,38 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
       expect(res).toMatchObject({ normalized: 2, duplicate: 0, error: 0 });
       const { rows } = await query('SELECT canonical_url FROM url_item ORDER BY id');
       expect(rows.map((r) => r.canonical_url)).toEqual(['https://a.example/page', 'https://b.example/cible']);
+    });
+
+    it('par blocs : mêmes comptes qu’en un seul bloc', async () => {
+      await ingestUrls([
+        'https://www.a.com/x?utm_source=t',
+        'https://a.com/x',
+        'https://b.com/y',
+        'https://c.com/z',
+        'https://a.com/x#frag',
+      ]);
+      const res = await normalizePending({ offline: true, chunkSize: 2 });
+      expect(res).toMatchObject({ normalized: 3, duplicate: 2, error: 0, total: 5 });
+    });
+
+    it('un bloc est écrit avant le réseau du suivant ; une panne du bloc 2 laisse le bloc 1 intact', async () => {
+      const urls = ['https://a.com/1', 'https://b.com/2', 'https://c.com/3', 'https://d.com/4', 'https://e.com/5'];
+      await ingestUrls(urls);
+      let seenWhenBlock2Starts = null;
+      const fetcher = async (url) => {
+        const i = urls.indexOf(url);
+        if (i === 2) {
+          const { rows } = await query('SELECT status FROM url_item ORDER BY id LIMIT 2');
+          seenWhenBlock2Starts = rows.map((r) => r.status);
+        }
+        if (i === 2 || i === 3) throw new Error('réseau injoignable');
+        return { finalUrl: url, httpStatus: 200, html: '<head><title>ok</title></head>' };
+      };
+      const res = await normalizePending({ fetcher, chunkSize: 2 });
+      expect(res).toMatchObject({ normalized: 3, duplicate: 0, error: 2, total: 5 });
+      expect(seenWhenBlock2Starts).toEqual(['normalized', 'normalized']);
+      const { rows } = await query('SELECT status FROM url_item ORDER BY id');
+      expect(rows.map((r) => r.status)).toEqual(['normalized', 'normalized', 'error', 'error', 'normalized']);
     });
 
     it('refuse un hôte non public sans émettre de requête', async () => {

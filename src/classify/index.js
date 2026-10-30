@@ -71,37 +71,58 @@ async function syncTaxonomy(taxonomy) {
   });
 }
 
-async function persistClassification(item, result, ids, runId) {
-  await withTransaction(async (client) => {
-    await client.query('DELETE FROM url_theme WHERE url_item_id = $1', [item.id]);
-    await client.query('DELETE FROM url_facet_value WHERE url_item_id = $1', [item.id]);
-
+// Un lot entier en une transaction et un nombre fixe de requêtes : les
+// affectations sont remplacées par des inserts multi-lignes (unnest).
+async function persistBatch(classified, ids, runId) {
+  if (classified.length === 0) return;
+  const itemIds = classified.map(({ item }) => item.id);
+  const themes = { item: [], theme: [], primary: [], score: [] };
+  const facets = { item: [], facet: [], value: [] };
+  const pushTheme = (itemId, slug, primary, score) => {
+    themes.item.push(itemId);
+    themes.theme.push(ids.themeIds.get(slug));
+    themes.primary.push(primary);
+    themes.score.push(score);
+  };
+  for (const { item, result } of classified) {
     if (result.primary) {
-      await client.query(
-        `INSERT INTO url_theme (url_item_id, theme_id, is_primary, score) VALUES ($1, $2, TRUE, $3)`,
-        [item.id, ids.themeIds.get(result.primary), result.primaryScore],
-      );
-      for (const sub of result.subthemes) {
-        await client.query(
-          `INSERT INTO url_theme (url_item_id, theme_id, is_primary, score) VALUES ($1, $2, FALSE, $3)`,
-          [item.id, ids.themeIds.get(sub.slug), sub.score],
-        );
-      }
+      pushTheme(item.id, result.primary, true, result.primaryScore);
+      for (const sub of result.subthemes) pushTheme(item.id, sub.slug, false, sub.score);
     }
-
     for (const [facetSlug, value] of Object.entries(result.facets)) {
-      await client.query(
-        `INSERT INTO url_facet_value (url_item_id, facet_id, value) VALUES ($1, $2, $3)`,
-        [item.id, ids.facetIds.get(facetSlug), value],
-      );
+      facets.item.push(item.id);
+      facets.facet.push(ids.facetIds.get(facetSlug));
+      facets.value.push(value);
     }
+  }
 
+  await withTransaction(async (client) => {
+    await client.query('DELETE FROM url_theme WHERE url_item_id = ANY($1)', [itemIds]);
+    await client.query('DELETE FROM url_facet_value WHERE url_item_id = ANY($1)', [itemIds]);
     await client.query(
-      `UPDATE url_item
-          SET status = 'classified', relevance_score = $2, confidence_score = $3,
-              quality_score = $4, classified_at = now(), classify_run_id = $5
-        WHERE id = $1`,
-      [item.id, result.scores.relevance, result.scores.confidence, result.scores.quality, runId],
+      `INSERT INTO url_theme (url_item_id, theme_id, is_primary, score)
+       SELECT * FROM unnest($1::bigint[], $2::bigint[], $3::boolean[], $4::numeric[])`,
+      [themes.item, themes.theme, themes.primary, themes.score],
+    );
+    await client.query(
+      `INSERT INTO url_facet_value (url_item_id, facet_id, value)
+       SELECT * FROM unnest($1::bigint[], $2::bigint[], $3::text[])`,
+      [facets.item, facets.facet, facets.value],
+    );
+    await client.query(
+      `UPDATE url_item ui
+          SET status = 'classified', relevance_score = s.relevance, confidence_score = s.confidence,
+              quality_score = s.quality, classified_at = now(), classify_run_id = $5
+         FROM unnest($1::bigint[], $2::numeric[], $3::numeric[], $4::numeric[])
+              AS s(id, relevance, confidence, quality)
+        WHERE ui.id = s.id`,
+      [
+        itemIds,
+        classified.map(({ result }) => result.scores.relevance),
+        classified.map(({ result }) => result.scores.confidence),
+        classified.map(({ result }) => result.scores.quality),
+        runId,
+      ],
     );
   });
 }
@@ -132,8 +153,9 @@ export async function classifyPending({ limit = 100, reclassify = false, taxonom
     // `limit`, curseur sur l'id (les items reclassés restent sélectionnables).
     for (let afterId = 0; ; ) {
       const items = await fetchBatch(afterId);
-      for (const item of items) {
-        const result = classifyItem(
+      const batch = items.map((item) => ({
+        item,
+        result: classifyItem(
           {
             canonicalUrl: item.canonical_url,
             domain: item.domain,
@@ -141,11 +163,11 @@ export async function classifyPending({ limit = 100, reclassify = false, taxonom
             queries: item.queries,
           },
           taxonomy,
-        );
-        await persistClassification(item, result, ids, runId);
-        classified += 1;
-        if (!result.primary) unthemed += 1;
-      }
+        ),
+      }));
+      await persistBatch(batch, ids, runId);
+      classified += batch.length;
+      unthemed += batch.filter(({ result }) => !result.primary).length;
       if (!reclassify || items.length < limit) break;
       afterId = items.at(-1).id;
     }
