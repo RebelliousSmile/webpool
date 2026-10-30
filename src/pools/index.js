@@ -1,17 +1,19 @@
 import fs from 'node:fs';
 import { query, withTransaction } from '../db.js';
-import { startRun, finishRun } from '../run.js';
+import { withRun } from '../run.js';
 import { buildPoolQuery } from './criteria.js';
 
-export async function createPool({ slug, label, definitionFile, definition }) {
+// Un slug existant n'est remplacé qu'avec `force` : pas d'écrasement silencieux.
+export async function createPool({ slug, label, definitionFile, definition, force = false }) {
   const def = definition ?? JSON.parse(fs.readFileSync(definitionFile, 'utf8'));
   buildPoolQuery(def); // valide la définition avant insertion
   const { rows } = await query(
     `INSERT INTO pool (slug, label, definition) VALUES ($1, $2, $3)
-     ON CONFLICT (slug) DO UPDATE SET label = EXCLUDED.label, definition = EXCLUDED.definition
+     ON CONFLICT (slug) DO ${force ? 'UPDATE SET label = EXCLUDED.label, definition = EXCLUDED.definition' : 'NOTHING'}
      RETURNING id`,
     [slug, label ?? slug, JSON.stringify(def)],
   );
+  if (rows.length === 0) throw new Error(`Pool existant : ${slug} (utiliser --force pour le remplacer)`);
   return rows[0].id;
 }
 
@@ -22,31 +24,27 @@ export async function refreshPool(slug) {
   if (rows.length === 0) throw new Error(`Pool inconnu : ${slug}`);
   const pool = rows[0];
 
-  const runId = await startRun('pool', { slug });
-  try {
+  return withRun('pool', { slug }, async (runId) => {
     const { text, values } = buildPoolQuery(pool.definition);
     const { rows: selected } = await query(text, values);
 
     await withTransaction(async (client) => {
       await client.query('DELETE FROM pool_item WHERE pool_id = $1', [pool.id]);
-      for (const [i, row] of selected.entries()) {
-        await client.query(
-          `INSERT INTO pool_item (pool_id, url_item_id, rank, score) VALUES ($1, $2, $3, $4)`,
-          [pool.id, row.id, i + 1, row.pool_score],
-        );
-      }
+      // Le rang est la position dans la sélection (WITH ORDINALITY), en une requête.
+      await client.query(
+        `INSERT INTO pool_item (pool_id, url_item_id, rank, score)
+         SELECT $1, t.id, t.rank, t.score
+           FROM unnest($2::bigint[], $3::numeric[]) WITH ORDINALITY AS t(id, score, rank)`,
+        [pool.id, selected.map((r) => r.id), selected.map((r) => r.pool_score)],
+      );
       await client.query(
         'UPDATE pool SET refreshed_at = now(), refresh_run_id = $2 WHERE id = $1',
         [pool.id, runId],
       );
     });
 
-    await finishRun(runId, 'done', { count: selected.length });
-    return { runId, count: selected.length };
-  } catch (err) {
-    await finishRun(runId, 'failed', { error: String(err.message ?? err) });
-    throw err;
-  }
+    return { count: selected.length };
+  });
 }
 
 export async function listPools() {

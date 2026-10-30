@@ -1,7 +1,6 @@
 -- webpool — socle PostgreSQL (US-02 / issue #2)
 -- Schéma initial : URLs, sources, taxonomie, facettes, pools, traçabilité.
 
-BEGIN;
 
 -- Trace de chaque exécution du pipeline (ingest, normalize, classify, pool).
 CREATE TABLE processing_run (
@@ -107,5 +106,3 @@ CREATE TABLE pool_item (
     PRIMARY KEY (pool_id, url_item_id),
     UNIQUE (pool_id, rank)
 );
-
-COMMIT;

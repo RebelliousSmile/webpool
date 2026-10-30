@@ -33,12 +33,42 @@ const KNOWN_KEYS = new Set([
   'domains_include', 'domains_exclude', 'order', 'limit',
 ]);
 
-export function buildPoolQuery(definition) {
-  for (const key of Object.keys(definition)) {
-    if (!KNOWN_KEYS.has(key)) throw new Error(`Critère inconnu dans la définition : ${key}`);
+const isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
+const isStringRecord = (v) =>
+  typeof v === 'object' && v !== null && !Array.isArray(v) && Object.values(v).every((x) => typeof x === 'string');
+const isUnitNumber = (v) => typeof v === 'number' && v >= 0 && v <= 1;
+
+const CHECKS = {
+  theme: [(v) => typeof v === 'string', 'une chaîne'],
+  subthemes: [isStringArray, 'un tableau de chaînes'],
+  domains_include: [isStringArray, 'un tableau de chaînes'],
+  domains_exclude: [isStringArray, 'un tableau de chaînes'],
+  facets: [isStringRecord, 'un objet de chaînes'],
+  min_relevance: [isUnitNumber, 'un nombre entre 0 et 1'],
+  min_quality: [isUnitNumber, 'un nombre entre 0 et 1'],
+  order: [(v) => typeof v === 'string', 'une chaîne'],
+  limit: [Number.isInteger, 'un entier'],
+};
+
+// Une définition vient d'un fichier JSON : chaque critère est typé avant de
+// partir en paramètre SQL, avec un message qui le nomme.
+function validateDefinition(definition) {
+  if (typeof definition !== 'object' || definition === null || Array.isArray(definition)) {
+    throw new Error('Définition de pool invalide : objet JSON attendu');
   }
+  for (const [key, value] of Object.entries(definition)) {
+    if (!KNOWN_KEYS.has(key)) throw new Error(`Critère inconnu dans la définition : ${key}`);
+    const [check, expected] = CHECKS[key];
+    if (value != null && !check(value)) {
+      throw new Error(`Critère ${key} invalide : ${expected} attendu (reçu : ${JSON.stringify(value)})`);
+    }
+  }
+}
+
+export function buildPoolQuery(definition) {
+  validateDefinition(definition);
   const order = definition.order ?? 'composite';
-  if (!ORDERS[order]) {
+  if (!Object.hasOwn(ORDERS, order)) {
     throw new Error(`Ordre inconnu : ${order} (attendu : ${Object.keys(ORDERS).join(', ')})`);
   }
 

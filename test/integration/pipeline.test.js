@@ -1,8 +1,11 @@
 import fs from 'node:fs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createSchema, dbAvailable, dropSchema, resetData, writeTempJson } from './helpers.js';
+import { createSchema, dbAvailable, dbRequired, dropSchema, resetData, writeTempJson } from './helpers.js';
 
 const available = await dbAvailable();
+if (!available && dbRequired()) {
+  throw new Error('[integration] PostgreSQL injoignable alors que la suite est requise (CI ou WEBPOOL_IT_REQUIRED).');
+}
 if (!available) {
   console.warn('[integration] PostgreSQL injoignable : suite ignorée (pnpm db:up pour la lancer).');
 }
@@ -13,7 +16,6 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
   let normalizePending;
   let classifyPending;
   let pools;
-  let config;
   const { query } = { query: (...a) => db.query(...a) };
 
   beforeAll(async () => {
@@ -23,7 +25,6 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
     ({ normalizePending } = await import('../../src/normalize/index.js'));
     ({ classifyPending } = await import('../../src/classify/index.js'));
     pools = await import('../../src/pools/index.js');
-    ({ config } = await import('../../src/config.js'));
   });
 
   afterAll(async () => {
@@ -68,6 +69,24 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
       ]);
     });
 
+    it('insère un lot en écritures groupées : 50 résultats dont 10 connus', async () => {
+      const urls = Array.from({ length: 50 }, (_, i) => `https://lot.example/${i}`);
+      await ingestUrls(urls.slice(0, 10), 'avant');
+      const res = await ingestUrls(urls, 'lot');
+      expect(res).toMatchObject({ inserted: 40, existing: 10, total: 50 });
+      expect(await count('url_item')).toBe(50);
+      expect(await count('url_source', "query = 'lot'")).toBe(50);
+      const { rows } = await query(`SELECT serp_rank FROM url_source WHERE query = 'lot' ORDER BY serp_rank`);
+      expect(rows.map((r) => r.serp_rank)).toEqual(urls.map((_, i) => i + 1));
+    });
+
+    it('une URL répétée dans la SERP donne un item et deux sources', async () => {
+      const res = await ingestUrls(['https://a.com/x', 'https://a.com/x']);
+      expect(res).toMatchObject({ inserted: 1, existing: 1, total: 2 });
+      expect(await count('url_item')).toBe(1);
+      expect(await count('url_source')).toBe(2);
+    });
+
     it("rejette un provider inconnu et une requête manquante sans créer de run", async () => {
       await expect(ingest({ provider: 'nope', searchQuery: 'q' })).rejects.toThrow(/Provider inconnu/);
       await expect(ingest({ provider: 'file' })).rejects.toThrow(/--query/);
@@ -93,6 +112,21 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
       const survivorId = dup[0].duplicate_of;
       expect(await count('url_source', `url_item_id = ${dup[0].id}`)).toBe(0);
       expect(await count('url_source', `url_item_id = ${survivorId}`)).toBe(2);
+    });
+
+    it('réingérer une variante doublon trace la requête sur la survivante', async () => {
+      const variant = 'https://www.unsplash.com/s/photos/forest?utm_source=x';
+      await ingestUrls([variant, 'https://unsplash.com/s/photos/forest'], 'forest');
+      await normalizePending({ offline: true });
+      const { rows: dup } = await query(`SELECT id, duplicate_of FROM url_item WHERE status = 'duplicate'`);
+
+      const again = await ingestUrls([variant], 'forêt lora');
+      expect(again).toMatchObject({ inserted: 0, existing: 1 });
+      expect(await count('url_source', `url_item_id = ${dup[0].id}`)).toBe(0);
+      const { rows } = await query('SELECT query FROM url_source WHERE url_item_id = $1 ORDER BY id', [
+        dup[0].duplicate_of,
+      ]);
+      expect(rows.map((r) => r.query)).toEqual(['forest', 'forest', 'forêt lora']);
     });
 
     it('en ligne : suit le résultat du fetcher, marque les échecs en error sans casser le run', async () => {
@@ -125,6 +159,67 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
       const { rows: runs } = await query(`SELECT status FROM processing_run WHERE kind = 'normalize'`);
       expect(runs).toEqual([{ status: 'done' }]);
     });
+
+    it("ignore un canonical d'un autre domaine : pas de fusion", async () => {
+      await ingestUrls(['https://a.example/page', 'https://b.example/cible']);
+      const fetcher = async (url) => ({
+        finalUrl: url,
+        httpStatus: 200,
+        html: url.includes('a.example')
+          ? '<head><link rel="canonical" href="https://b.example/cible"></head>'
+          : '<head><title>B</title></head>',
+      });
+      const res = await normalizePending({ fetcher });
+      expect(res).toMatchObject({ normalized: 2, duplicate: 0, error: 0 });
+      const { rows } = await query('SELECT canonical_url FROM url_item ORDER BY id');
+      expect(rows.map((r) => r.canonical_url)).toEqual(['https://a.example/page', 'https://b.example/cible']);
+    });
+
+    it('par blocs : mêmes comptes qu’en un seul bloc', async () => {
+      await ingestUrls([
+        'https://www.a.com/x?utm_source=t',
+        'https://a.com/x',
+        'https://b.com/y',
+        'https://c.com/z',
+        'https://a.com/x#frag',
+      ]);
+      const res = await normalizePending({ offline: true, chunkSize: 2 });
+      expect(res).toMatchObject({ normalized: 3, duplicate: 2, error: 0, total: 5 });
+    });
+
+    it('un bloc est écrit avant le réseau du suivant ; une panne du bloc 2 laisse le bloc 1 intact', async () => {
+      const urls = ['https://a.com/1', 'https://b.com/2', 'https://c.com/3', 'https://d.com/4', 'https://e.com/5'];
+      await ingestUrls(urls);
+      let seenWhenBlock2Starts = null;
+      const fetcher = async (url) => {
+        const i = urls.indexOf(url);
+        if (i === 2) {
+          const { rows } = await query('SELECT status FROM url_item ORDER BY id LIMIT 2');
+          seenWhenBlock2Starts = rows.map((r) => r.status);
+        }
+        if (i === 2 || i === 3) throw new Error('réseau injoignable');
+        return { finalUrl: url, httpStatus: 200, html: '<head><title>ok</title></head>' };
+      };
+      const res = await normalizePending({ fetcher, chunkSize: 2 });
+      expect(res).toMatchObject({ normalized: 3, duplicate: 0, error: 2, total: 5 });
+      expect(seenWhenBlock2Starts).toEqual(['normalized', 'normalized']);
+      const { rows } = await query('SELECT status FROM url_item ORDER BY id');
+      expect(rows.map((r) => r.status)).toEqual(['normalized', 'normalized', 'error', 'error', 'normalized']);
+    });
+
+    it('refuse un hôte non public sans émettre de requête', async () => {
+      await ingestUrls(['http://127.0.0.1/admin', 'http://169.254.169.254/latest', 'http://[::1]/']);
+      let calls = 0;
+      const fetchImpl = async () => {
+        calls += 1;
+        return new Response('<head></head>', { headers: { 'content-type': 'text/html' } });
+      };
+      const res = await normalizePending({ fetchImpl });
+      expect(res).toMatchObject({ normalized: 0, error: 3 });
+      expect(calls).toBe(0);
+      const { rows } = await query('SELECT status, error FROM url_item');
+      for (const row of rows) expect(row).toMatchObject({ status: 'error', error: expect.stringMatching(/hôte refusé/) });
+    });
   });
 
   describe('classify', () => {
@@ -141,9 +236,12 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
       facets: [{ slug: 'type', label: 'Type', values: [{ value: 'article', patterns: [] }] }],
       ...over,
     });
+    // La taxonomie est injectée : config est gelée, aucun test ne la modifie.
+    let taxonomy;
     const useTaxonomy = (t) => {
-      config.taxonomyPath = writeTempJson('taxonomy.json', t);
+      taxonomy = t;
     };
+    const classify = (opts = {}) => classifyPending({ taxonomy, ...opts });
     const prepare = async () => {
       await ingestUrls(['https://example.com/lora-training', 'https://unsplash.com/forest']);
       await normalizePending({ offline: true });
@@ -152,7 +250,7 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
     it('synchronise la taxonomie en base et classe', async () => {
       useTaxonomy(tax());
       await prepare();
-      const res = await classifyPending();
+      const res = await classify();
       expect(res).toMatchObject({ classified: 2, unthemed: 0 });
       const { rows } = await query(
         `SELECT ui.domain, t.slug, ut.is_primary FROM url_theme ut
@@ -169,7 +267,7 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
     it('resynchronise thèmes et facettes quand la taxonomie change, sans doublon', async () => {
       useTaxonomy(tax());
       await prepare();
-      await classifyPending();
+      await classify();
 
       useTaxonomy(
         tax({
@@ -180,7 +278,7 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
           ],
         }),
       );
-      await classifyPending({ reclassify: true });
+      await classify({ reclassify: true });
 
       const { rows: themes } = await query(
         `SELECT t.slug, t.label, p.slug AS parent FROM theme t LEFT JOIN theme p ON p.id = t.parent_id ORDER BY t.slug`,
@@ -199,18 +297,56 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
     it("ne reclasse pas sans --all", async () => {
       useTaxonomy(tax());
       await prepare();
-      await classifyPending();
-      const again = await classifyPending();
+      await classify();
+      const again = await classify();
       expect(again.classified).toBe(0);
+    });
+
+    it('--all reclasse tout le corpus au-delà de limit', async () => {
+      useTaxonomy(tax());
+      await ingestUrls(['https://a.com/lora', 'https://b.com/lora', 'https://c.com/x', 'https://d.com/x', 'https://e.com/x']);
+      await normalizePending({ offline: true });
+      await classify();
+      const res = await classify({ reclassify: true, limit: 2 });
+      expect(res.classified).toBe(5);
+      const { rows } = await query(`SELECT detail FROM processing_run WHERE kind = 'classify' ORDER BY id DESC LIMIT 1`);
+      expect(rows[0].detail).toMatchObject({ classified: 5 });
+      expect(await count('url_item', `classify_run_id = ${res.runId}`)).toBe(5);
+    });
+
+    it('supprime un thème et une facette retirés du JSON, avec leurs affectations', async () => {
+      useTaxonomy(tax());
+      await prepare();
+      await classify();
+      useTaxonomy(tax({ themes: [{ slug: 'photo', label: 'Photo', keywords: ['unsplash'], children: [] }], facets: [] }));
+      await classify({ reclassify: true });
+      const { rows } = await query('SELECT slug FROM theme ORDER BY slug');
+      expect(rows).toEqual([{ slug: 'photo' }]);
+      expect(await count('url_theme')).toBe(1);
+      expect(await count('facet_definition')).toBe(0);
+      expect(await count('url_facet_value')).toBe(0);
+    });
+
+    it('rejette un slug en double sans rien écrire, run en failed', async () => {
+      useTaxonomy(
+        tax({
+          themes: [
+            { slug: 'ia', label: 'IA', keywords: ['lora'], children: [{ slug: 'photo', label: 'X', keywords: [] }] },
+            { slug: 'photo', label: 'Photo', keywords: ['unsplash'], children: [] },
+          ],
+        }),
+      );
+      await prepare();
+      await expect(classify()).rejects.toThrow(/slug de thème en double « photo »/);
+      expect(await count('theme')).toBe(0);
+      expect(await count('facet_definition')).toBe(0);
+      const { rows } = await query(`SELECT status FROM processing_run WHERE kind = 'classify'`);
+      expect(rows).toEqual([{ status: 'failed' }]);
     });
   });
 
   describe('pools', () => {
     const setup = async () => {
-      config.taxonomyPath = writeTempJson('taxonomy.json', {
-        themes: [{ slug: 'ia', label: 'IA', keywords: ['lora'], children: [] }],
-        facets: [],
-      });
       await ingestUrls([
         'https://a.com/lora-1',
         'https://b.com/lora-2',
@@ -218,7 +354,9 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
         'https://d.com/rien',
       ]);
       await normalizePending({ offline: true });
-      await classifyPending();
+      await classifyPending({
+        taxonomy: { themes: [{ slug: 'ia', label: 'IA', keywords: ['lora'], children: [] }], facets: [] },
+      });
       // qualité distincte et déterministe pour fixer le rang
       await query(`UPDATE url_item SET quality_score = CASE domain
           WHEN 'a.com' THEN 0.2 WHEN 'b.com' THEN 0.9 WHEN 'c.com' THEN 0.5 ELSE 0.1 END,
@@ -251,11 +389,22 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
       expect(after[0].refreshed_at.getTime()).toBeGreaterThanOrEqual(before[0].refreshed_at.getTime());
     });
 
-    it('une définition modifiée (createPool sur un slug existant) change la sélection au refresh', async () => {
+    it('createPool sur un slug existant échoue sans --force et laisse la définition intacte', async () => {
+      await setup();
+      await pools.createPool({ slug: 'p', definition: def });
+      await expect(pools.createPool({ slug: 'p', definition: { ...def, limit: 1 } })).rejects.toThrow(
+        /Pool existant : p/,
+      );
+      const { rows } = await query('SELECT definition FROM pool WHERE slug = $1', ['p']);
+      expect(rows[0].definition).toEqual(def);
+      expect((await pools.refreshPool('p')).count).toBe(3);
+    });
+
+    it('une définition modifiée (createPool --force sur un slug existant) change la sélection au refresh', async () => {
       await setup();
       await pools.createPool({ slug: 'p', definition: def });
       await pools.refreshPool('p');
-      await pools.createPool({ slug: 'p', definition: { ...def, limit: 1 } });
+      await pools.createPool({ slug: 'p', definition: { ...def, limit: 1 }, force: true });
       expect((await pools.refreshPool('p')).count).toBe(1);
       expect(await count('pool_item')).toBe(1);
       expect(await count('pool')).toBe(1);

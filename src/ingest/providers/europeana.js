@@ -21,7 +21,7 @@ export function mapResponse(data) {
     }));
 }
 
-export async function search({ query, limit }, { fetchImpl } = {}) {
-  const key = requireConfig('europeana', config.europeanaApiKey, 'EUROPEANA_API_KEY');
+export async function search({ query, limit }, { fetchImpl, apiKey = config.europeanaApiKey } = {}) {
+  const key = requireConfig('europeana', apiKey, 'EUROPEANA_API_KEY');
   return mapResponse(await fetchJson('Europeana', buildUrl(query, key, limit), { fetchImpl }));
 }

@@ -22,7 +22,8 @@ export async function withTransaction(fn) {
     await client.query('COMMIT');
     return result;
   } catch (err) {
-    await client.query('ROLLBACK');
+    // un ROLLBACK qui échoue (connexion perdue) ne masque pas l'erreur d'origine
+    await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
     client.release();

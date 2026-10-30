@@ -8,6 +8,22 @@ export async function startRun(kind, detail = {}) {
   return rows[0].id;
 }
 
+// Patron unique d'un run : `fn(runId)` renvoie le détail du succès, enregistré
+// avec le statut `done` et renvoyé au côté de `runId` ; une erreur clôt le run
+// en `failed` puis est relancée.
+export async function withRun(kind, detail, fn) {
+  const runId = await startRun(kind, detail);
+  let result;
+  try {
+    result = await fn(runId);
+  } catch (err) {
+    await finishRun(runId, 'failed', { error: String(err.message ?? err) }).catch(() => {});
+    throw err;
+  }
+  await finishRun(runId, 'done', result);
+  return { runId, ...result };
+}
+
 export async function finishRun(id, status = 'done', extraDetail = null) {
   await query(
     `UPDATE processing_run

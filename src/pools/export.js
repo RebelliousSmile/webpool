@@ -47,7 +47,9 @@ export function toCsv({ items }) {
   return `${lines.join('\n')}\n`;
 }
 
-const mdCell = (s) => String(s ?? '').replaceAll('|', '\\|').replace(/\s+/g, ' ').trim();
+// Les titres viennent du web : le HTML est échappé, un rendu Markdown n'exécute rien.
+const escapeHtml = (s) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+const mdCell = (s) => escapeHtml(String(s ?? '')).replaceAll('|', '\\|').replace(/\s+/g, ' ').trim();
 
 export function toMarkdown({ pool, items }) {
   const lines = [
@@ -59,7 +61,7 @@ export function toMarkdown({ pool, items }) {
     '|---|---|---|---|',
   ];
   for (const it of items) {
-    const title = mdCell(it.title) || it.canonical_url;
+    const title = mdCell(it.title) || mdCell(it.canonical_url);
     lines.push(
       `| ${it.rank} | [${title.replaceAll(']', '\\]')}](${it.canonical_url.replaceAll(')', '%29')}) | ${mdCell(it.domain)} | ${Number(it.score).toFixed(3)} |`,
     );

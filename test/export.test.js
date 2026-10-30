@@ -33,6 +33,12 @@ describe('export de pool', () => {
     expect(md).toContain('# Mon pool');
   });
 
+  it('Markdown : le HTML des titres est échappé', () => {
+    const md = toMarkdown({ ...data, items: [{ ...data.items[0], title: '<script>x</script> & co' }] });
+    expect(md).toContain('[&lt;script&gt;x&lt;/script&gt; &amp; co](https://a.com/x)');
+    expect(md).not.toContain('<script>');
+  });
+
   it('rejette un format inconnu', () => {
     expect(() => formatPool(data, 'xml')).toThrow(/Format inconnu/);
   });

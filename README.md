@@ -76,7 +76,7 @@ rank,url,domain,title,score
 
 ```bash
 pnpm install
-pnpm db:up                  # PostgreSQL 17 via docker compose (schéma auto-appliqué)
+pnpm db:up                  # PostgreSQL 17 via docker compose, puis webpool migrate
 cp .env.example .env        # optionnel : défauts corrects pour le compose local
 
 # Ingestion depuis un export JSON (offline) ou un provider SERP (clés dans .env, voir .env.example)
@@ -90,14 +90,22 @@ pnpm webpool normalize            # suit les redirections, canonise, déduplique
 pnpm webpool normalize --offline  # sans réseau : canonise l'URL brute
 
 pnpm webpool classify             # taxonomie config/taxonomy.json, règles + scores
+pnpm webpool classify --all       # reclasse tout le corpus, par lots de --limit (défaut 100)
 
 # Pools matérialisés
 pnpm webpool pool create --slug lora-foret --label "LoRA forêt" --file mes-criteres.json
+pnpm webpool pool create --slug lora-foret --file mes-criteres.json --force   # remplace un pool existant
 pnpm webpool pool refresh --slug lora-foret
 pnpm webpool pool show --slug lora-foret
 pnpm webpool pool export --slug lora-foret --format csv --out lora-foret.csv   # json | csv | md, stdout par défaut
 pnpm webpool stats
+pnpm webpool migrate              # applique les migrations manquantes (pnpm db:up le fait)
 ```
+
+Sans `--force`, `pool create` refuse un slug déjà pris et laisse sa définition
+intacte. Chaque critère est typé à la lecture du fichier : un critère inconnu ou mal
+typé (`limit` non entier, `subthemes` qui n'est pas un tableau…) est refusé avec un
+message qui le nomme. Dans l'export Markdown, le HTML des titres est échappé.
 
 Exemple de définition de pool (lisible et réexécutable) :
 
@@ -111,6 +119,28 @@ Exemple de définition de pool (lisible et réexécutable) :
   "limit": 50
 }
 ```
+
+### Schéma et migrations
+
+Le schéma vit dans `db/migrations/NNN_description.sql`. `webpool migrate` applique
+dans l'ordre les fichiers absents de la table `schema_migration`, chacun dans sa
+transaction avec l'enregistrement de sa version : une migration en erreur n'est ni
+appliquée ni enregistrée, et le message nomme le fichier. Un verrou consultatif
+empêche deux `migrate` concurrents de se chevaucher. Une base créée avant les
+migrations (tables présentes, pas de `schema_migration`) enregistre `001` comme
+baseline sans la rejouer et garde son corpus.
+
+Règle : une migration par changement de schéma, et jamais de modification d'une
+migration publiée (une base l'a peut-être déjà appliquée) ; une correction est une
+nouvelle migration.
+
+### Taxonomie
+
+`config/taxonomy.json` est la source de vérité : à chaque `classify`, thèmes et
+facettes sont synchronisés en base dans une transaction. Un thème ou une facette
+retiré du JSON est supprimé, avec ses affectations ; un slug en double (thème,
+sous-thème ou facette) fait échouer le run sans rien écrire. Après une
+modification, `classify --all` reclasse le corpus existant.
 
 ### Export et réexécutabilité
 
@@ -131,6 +161,24 @@ borne la concurrence entre hôtes. Réglages dans `.env` : `WEBPOOL_HOST_DELAY_M
 `WEBPOOL_CONCURRENCY`, `WEBPOOL_FETCH_TIMEOUT_MS`. Une réponse 4xx/5xx place l'URL
 en statut `error` (avec son code HTTP) sans interrompre le run.
 
+Les URL sont traitées par blocs de `WEBPOOL_NORMALIZE_CHUNK` (défaut 100) : réseau
+du bloc, puis écriture, puis bloc suivant. La mémoire reste bornée et un bloc écrit
+est conservé si un bloc suivant échoue. L'ingest, la classification et le refresh
+d'un pool écrivent chacun leur lot en quelques requêtes groupées.
+
+Les URL visitées viennent de l'extérieur : avant chaque requête, l'hôte est résolu
+et refusé (`error` : « hôte refusé ») si une de ses adresses n'est pas publique —
+loopback, plages privées, link-local et métadonnées cloud (`169.254.169.254`),
+CGNAT, IPv6 locales. Les redirections sont suivies une à une : chaque saut repasse
+ce contrôle et le délai par hôte, dans la limite de `WEBPOOL_MAX_REDIRECTS`
+(défaut 5, au-delà : « trop de redirections »). `WEBPOOL_ALLOW_PRIVATE_HOSTS=1`
+désactive la garde, pour un usage intranet assumé. Les appels aux providers SERP
+(dont un SearXNG local) ne sont pas filtrés.
+
+Le `<link rel="canonical">` d'une page n'est retenu que s'il désigne le même
+domaine que l'URL finale (hôte exact, `www.` ignoré) ; sinon l'URL finale sert
+d'URL canonique, sans fusion avec l'autre site.
+
 ### Providers SERP
 
 | Provider | Clé / config | Remarque |
@@ -148,10 +196,11 @@ s'arrête le 1er janvier 2027.
 
 | Chemin | Rôle |
 |---|---|
-| `db/init/001_init.sql` | Schéma PostgreSQL (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) |
+| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) |
 | `src/ingest/` | Providers SERP (`file`, `brave`, `searxng`, `europeana`, `flickr`) + insertion tracée |
 | `src/normalize/` | Canonisation stricte (tracking, redirections, dédup domaine+canonique), fetch poli |
 | `src/classify/` | Classifieur par règles piloté par `config/taxonomy.json` |
+| `src/migrate.js` | Runner de migrations (`webpool migrate`) |
 | `src/pools/` | Définition JSON → SQL paramétré → matérialisation rangée → export |
 | `bin/webpool.js` | CLI |
 | `test/` | Tests unitaires (vitest) des fonctions pures |
@@ -165,9 +214,15 @@ pnpm db:up
 pnpm test:integration   # couches DB (ingest, normalize, classify, pools)
 ```
 
-La suite d'intégration utilise le PostgreSQL docker local (`DATABASE_URL`) dans un
-schéma jetable créé puis supprimé par fichier de test, remis à zéro entre les tests ;
-elle est ignorée avec un avertissement si la base est injoignable.
+La suite d'intégration utilise le PostgreSQL docker local dans un schéma jetable créé
+puis supprimé par fichier de test, remis à zéro entre les tests. Elle charge `.env` et
+calcule la même URL que le CLI (`DATABASE_URL`, sinon `localhost:${WEBPOOL_DB_PORT:-5432}`).
+
+Sur un poste, elle est ignorée avec un avertissement si la base est injoignable.
+`WEBPOOL_IT_REQUIRED=1` la rend obligatoire : une base injoignable fait alors échouer
+la commande. La CI GitHub Actions (`.github/workflows/ci.yml`, Node 22 et 24, service
+`postgres:17-alpine`) la rend obligatoire d'office et exécute les deux suites à chaque
+push et pull request.
 
 ## Licence
 

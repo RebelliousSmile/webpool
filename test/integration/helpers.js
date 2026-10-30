@@ -2,10 +2,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import pg from 'pg';
+// Jamais src/config.js ici : ce module est importé par setup.js avant que DATABASE_URL
+// ne pointe sur le schéma jetable, et figerait config.databaseUrl sur le schéma réel.
+import { defaultDatabaseUrl, loadDotEnv } from '../../src/env.js';
+import { migrate } from '../../src/migrate.js';
 
-const DEFAULT_URL = 'postgres://webpool:webpool@localhost:5432/webpool';
+loadDotEnv();
 // URL d'origine, mémorisée avant que setup.js ne redirige DATABASE_URL vers le schéma jetable.
-process.env.WEBPOOL_IT_BASE_URL ??= process.env.DATABASE_URL ?? DEFAULT_URL;
+process.env.WEBPOOL_IT_BASE_URL ??= process.env.DATABASE_URL ?? defaultDatabaseUrl();
 process.env.WEBPOOL_IT_SCHEMA ??= `webpool_it_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 export const BASE_URL = process.env.WEBPOOL_IT_BASE_URL;
@@ -27,6 +31,11 @@ async function withAdminClient(fn) {
   }
 }
 
+// En CI (ou WEBPOOL_IT_REQUIRED défini), une base injoignable fait échouer la suite.
+export function dbRequired(env = process.env) {
+  return Boolean(env.CI || env.WEBPOOL_IT_REQUIRED);
+}
+
 export async function dbAvailable() {
   try {
     await withAdminClient((c) => c.query('SELECT 1'));
@@ -36,12 +45,21 @@ export async function dbAvailable() {
   }
 }
 
-export async function createSchema() {
-  const sql = fs.readFileSync(new URL('../../db/init/001_init.sql', import.meta.url), 'utf8');
+// Schéma jetable migré par le runner, comme une base réelle. `migrate: false`
+// le laisse vide (tests du runner lui-même).
+export async function createSchema({ migrate: runMigrations = true } = {}) {
   await withAdminClient(async (c) => {
     await c.query(`CREATE SCHEMA ${SCHEMA}`);
     await c.query(`SET search_path TO ${SCHEMA}`);
-    await c.query(sql);
+    if (runMigrations) await migrate({ client: c });
+  });
+}
+
+// Client admin dont le search_path vise le schéma jetable.
+export async function withSchemaClient(fn) {
+  return withAdminClient(async (c) => {
+    await c.query(`SET search_path TO ${SCHEMA}`);
+    return fn(c);
   });
 }
 
@@ -51,6 +69,10 @@ export async function dropSchema() {
 
 // Remise à zéro entre les tests (schéma conservé, séquences réinitialisées).
 export async function resetData(query) {
+  const { rows } = await query('SELECT current_schema() AS schema');
+  if (rows[0]?.schema !== SCHEMA) {
+    throw new Error(`resetData refusé : schéma courant "${rows[0]?.schema}", attendu "${SCHEMA}"`);
+  }
   await query(
     `TRUNCATE pool_item, pool, url_facet_value, facet_definition, url_theme, theme,
               url_source, url_item, processing_run RESTART IDENTITY CASCADE`,

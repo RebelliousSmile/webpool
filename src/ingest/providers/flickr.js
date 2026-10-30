@@ -26,7 +26,7 @@ export function mapResponse(data) {
   }));
 }
 
-export async function search({ query, limit }, { fetchImpl } = {}) {
-  const key = requireConfig('flickr', config.flickrApiKey, 'FLICKR_API_KEY');
+export async function search({ query, limit }, { fetchImpl, apiKey = config.flickrApiKey } = {}) {
+  const key = requireConfig('flickr', apiKey, 'FLICKR_API_KEY');
   return mapResponse(await fetchJson('Flickr', buildUrl(query, key, limit), { fetchImpl }));
 }

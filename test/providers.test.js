@@ -5,7 +5,6 @@ import * as brave from '../src/ingest/providers/brave.js';
 import * as searxng from '../src/ingest/providers/searxng.js';
 import * as europeana from '../src/ingest/providers/europeana.js';
 import * as flickr from '../src/ingest/providers/flickr.js';
-import { config } from '../src/config.js';
 import { normalizeResults } from '../src/ingest/providers/file.js';
 
 describe('provider file — normalizeResults', () => {
@@ -81,28 +80,23 @@ describe('providers SERP — contrat {url, rank, title}', () => {
   });
 
   it('search : appelle fetch avec la clé et mappe le résultat', async () => {
-    config.braveApiKey = 'BK';
     let seen;
     const res = await brave.search(
       { query: 'q' },
-      { fetchImpl: async (url, init) => ((seen = init), jsonResponse(fixture('brave-response.json'))) },
+      { apiKey: 'BK', fetchImpl: async (url, init) => ((seen = init), jsonResponse(fixture('brave-response.json'))) },
     );
     expect(seen.headers['X-Subscription-Token']).toBe('BK');
     expect(res).toHaveLength(2);
   });
 
   it('search : clé ou URL absente → message explicite, erreur HTTP → message lisible', async () => {
-    config.europeanaApiKey = '';
-    await expect(europeana.search({ query: 'q' })).rejects.toThrow(/EUROPEANA_API_KEY manquante/);
-    config.searxngUrl = '';
-    await expect(searxng.search({ query: 'q' })).rejects.toThrow(/SEARXNG_URL manquante/);
-    config.flickrApiKey = 'K';
+    await expect(europeana.search({ query: 'q' }, { apiKey: '' })).rejects.toThrow(/EUROPEANA_API_KEY manquante/);
+    await expect(searxng.search({ query: 'q' }, { baseUrl: '' })).rejects.toThrow(/SEARXNG_URL manquante/);
     await expect(
-      flickr.search({ query: 'q' }, { fetchImpl: async () => jsonResponse({}, 429) }),
+      flickr.search({ query: 'q' }, { apiKey: 'K', fetchImpl: async () => jsonResponse({}, 429) }),
     ).rejects.toThrow(/Flickr : HTTP 429 \(quota dépassé/);
-    config.braveApiKey = 'BK';
     await expect(
-      brave.search({ query: 'q' }, { fetchImpl: async () => jsonResponse({}, 401) }),
+      brave.search({ query: 'q' }, { apiKey: 'BK', fetchImpl: async () => jsonResponse({}, 401) }),
     ).rejects.toThrow(/Brave Search : HTTP 401 \(clé API refusée\)/);
   });
 });
