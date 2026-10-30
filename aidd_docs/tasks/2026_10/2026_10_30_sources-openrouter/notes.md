@@ -78,9 +78,6 @@ par provider (option 2), qui double la frontière.
 
 ## Points ouverts
 
-- `.env.example` à compléter à la main (lecture bloquée par permission) :
-  `OPENROUTER_API_KEY`, et en option `OPENROUTER_ENGINE`, `OPENROUTER_MODEL`,
-  `OPENROUTER_TIMEOUT_MS`.
 - Premier appel réel en local réussi (run #10, 20 URLs sur 12 domaines, dont 7
   pages de peterburg2.ru). Il avait d'abord échoué : la variable utilisateur Windows
   `OPENROUTER_API_KEY` portait une clé inconnue d'OpenRouter (401 « User not
