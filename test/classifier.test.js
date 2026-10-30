@@ -67,6 +67,14 @@ describe('classifyItem', () => {
     expect(res.scores.relevance).toBe(1);
   });
 
+  it('mesure la pertinence sur le contenu propre, pas sur la requête', () => {
+    const res = classifyItem(
+      item({ canonicalUrl: 'https://www.lemonde.fr/pixels/', domain: 'lemonde.fr', title: 'Pixels — Le Monde', queries: ['lora dataset captioning'] }),
+      taxonomy,
+    );
+    expect(res.scores.relevance).toBe(0);
+  });
+
   it('retourne primary null et confidence 0 sans correspondance', () => {
     const res = classifyItem(
       item({

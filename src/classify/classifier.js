@@ -114,7 +114,6 @@ const round3 = (n) => Math.round(n * 1000) / 1000;
 export function classifyItem({ canonicalUrl, domain, title, queries }, taxonomy) {
   const own = [canonicalUrl, domain, title ?? ''].join(' ').toLowerCase();
   const queryText = (queries ?? []).join(' ').toLowerCase();
-  const haystack = `${own} ${queryText}`;
 
   const scored = scoreThemes({ own, query: queryText }, taxonomy.themes ?? []);
   const ranked = [...scored].sort(compareThemes);
@@ -139,7 +138,9 @@ export function classifyItem({ canonicalUrl, domain, title, queries }, taxonomy)
     subthemes,
     facets: pickFacets(own, taxonomy.facets),
     scores: {
-      relevance: round3(relevanceScore(haystack, queries ?? [])),
+      // termes des requêtes retrouvés dans le contenu propre : chercher aussi dans
+      // les requêtes elles-mêmes donnerait 1 à toute URL découverte
+      relevance: round3(relevanceScore(own, queries ?? [])),
       confidence: round3(confidence),
       quality: round3(qualityScore({ canonicalUrl, domain, title }, taxonomy)),
     },
