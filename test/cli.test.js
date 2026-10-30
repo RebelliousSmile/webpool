@@ -66,6 +66,12 @@ describe('CLI', () => {
     expect(stderr).toMatch(/--budget (requis|doit être un entier > 0)/);
   });
 
+  it.each([[[]], [['--budget=0']]])('cycle refuse un budget absent ou invalide (%j)', async (args) => {
+    const { code, stderr } = await cli('cycle', ...args);
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/--budget (requis|doit être un entier > 0)/);
+  });
+
   it.each([['abc'], ['-3'], ['0'], ['1.5']])('refuse --limit=%s avec le code 1', async (value) => {
     const { code, stderr } = await cli('classify', `--limit=${value}`);
     expect(code).toBe(1);

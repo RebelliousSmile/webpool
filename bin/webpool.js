@@ -11,6 +11,7 @@ import { formatPool } from '../src/pools/export.js';
 import { stats } from '../src/stats.js';
 import { assertUsage, listDomains, qualifyDomain, setExploreExcluded } from '../src/domains/index.js';
 import { addQuery, explore, importQueries, listQueries, parseTags } from '../src/explore/index.js';
+import { cycle } from '../src/cycle/index.js';
 
 const HELP = `webpool — pipeline d'URLs : ingestion, normalisation, classification, pools
 
@@ -31,6 +32,7 @@ Usage :
   webpool query import --file requetes.json      (liste de {provider, query, tags})
   webpool query list [--status active|exhausted|paused]
   webpool explore --budget N [--provider p] [--limit N]   (au plus N appels aux providers)
+  webpool cycle --budget N [--provider p] [--offline]   (explore, normalize et classify jusqu'à vider la file, refresh des pools)
   webpool stats
   webpool migrate                         (applique les migrations db/migrations manquantes)
 `;
@@ -208,6 +210,14 @@ async function main() {
       console.log(
         `Explore run #${res.runId} : ${res.calls} appels, ${res.newUrls} URLs nouvelles, ${res.newDomains} domaines nouveaux, ${res.errors} erreurs${res.woken ? `, ${res.woken} requêtes reposées réactivées` : ''}.`,
       );
+      break;
+    }
+    case 'cycle': {
+      const budget = parsePositive('budget', values.budget);
+      if (budget === undefined) throw new Error('cycle : --budget requis');
+      const res = await cycle({ budget, provider: values.provider, offline: values.offline, exploreOptions: { limit } });
+      for (const s of res.steps) console.log(`${s.name.padEnd(9)} ${s.ok ? 'ok    ' : 'ÉCHEC '} ${s.line}`);
+      if (!res.ok) process.exitCode = 1;
       break;
     }
     case 'migrate': {

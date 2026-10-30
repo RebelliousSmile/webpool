@@ -1,0 +1,28 @@
+{
+  "queries": [
+    { "provider": "brave", "query": "長崎 写真 フリー素材", "tags": ["lieu:nagasaki", "lang:ja"] },
+    { "provider": "brave", "query": "長崎 風景 写真素材", "tags": ["lieu:nagasaki", "lang:ja"] },
+    { "provider": "brave", "query": "長崎 古写真 アーカイブ", "tags": ["lieu:nagasaki", "lang:ja"] },
+    { "provider": "brave", "query": "五島列島 写真", "tags": ["lieu:goto", "lang:ja"] },
+    { "provider": "brave", "query": "五島列島 教会 写真素材", "tags": ["lieu:goto", "lang:ja"] },
+    { "provider": "brave", "query": "五島 風景 フリー素材", "tags": ["lieu:goto", "lang:ja"] },
+    { "provider": "brave", "query": "京都 写真素材", "tags": ["lieu:kyoto", "lang:ja"] },
+    { "provider": "brave", "query": "京都 寺 写真 フリー", "tags": ["lieu:kyoto", "lang:ja"] },
+    { "provider": "brave", "query": "京都 古写真 デジタルアーカイブ", "tags": ["lieu:kyoto", "lang:ja"] },
+    { "provider": "brave", "query": "東京 風景 写真", "tags": ["lieu:tokyo", "lang:ja"] },
+    { "provider": "brave", "query": "東京 街並み フリー素材", "tags": ["lieu:tokyo", "lang:ja"] },
+    { "provider": "brave", "query": "東京 古写真 明治 アーカイブ", "tags": ["lieu:tokyo", "lang:ja"] },
+    { "provider": "brave", "query": "Nagasaki public domain photos", "tags": ["lieu:nagasaki", "lang:en"] },
+    { "provider": "brave", "query": "Nagasaki historical photographs archive", "tags": ["lieu:nagasaki", "lang:en"] },
+    { "provider": "brave", "query": "Goto Islands photos free license", "tags": ["lieu:goto", "lang:en"] },
+    { "provider": "brave", "query": "Goto Islands churches photography", "tags": ["lieu:goto", "lang:en"] },
+    { "provider": "brave", "query": "Kyoto public domain photography", "tags": ["lieu:kyoto", "lang:en"] },
+    { "provider": "brave", "query": "Kyoto Meiji era photographs archive", "tags": ["lieu:kyoto", "lang:en"] },
+    { "provider": "brave", "query": "Tokyo street photography creative commons", "tags": ["lieu:tokyo", "lang:en"] },
+    { "provider": "brave", "query": "Tokyo Edo period photographs public domain", "tags": ["lieu:tokyo", "lang:en"] },
+    { "provider": "brave", "query": "Nagasaki photos libres de droits", "tags": ["lieu:nagasaki", "lang:fr"] },
+    { "provider": "brave", "query": "îles Gotō photographies", "tags": ["lieu:goto", "lang:fr"] },
+    { "provider": "brave", "query": "Kyoto photos libres de droits", "tags": ["lieu:kyoto", "lang:fr"] },
+    { "provider": "brave", "query": "Tokyo photographies anciennes domaine public", "tags": ["lieu:tokyo", "lang:fr"] }
+  ]
+}
