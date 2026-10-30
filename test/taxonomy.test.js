@@ -73,6 +73,54 @@ describe('taxonomie réelle — détections attendues', () => {
   });
 });
 
+describe('taxonomie réelle — pools thématiques', () => {
+  it('un article frontiersin de 2025 : psychologie, publication, annee 2025', () => {
+    const res = classify({
+      url: 'https://www.frontiersin.org/journals/psychology/articles/10.3389/fpsyg.2025.1523456/full',
+      title: 'Emotion regulation and anxiety in adolescents: a longitudinal study',
+    });
+    expect(res.primary).toBe('psychologie');
+    expect(res.facets['content-type']).toBe('publication');
+    expect(res.facets.annee).toBe('2025');
+  });
+
+  it('un DOI est une publication ; sans année visible, pas de facette annee', () => {
+    const res = classify({ url: 'https://doi.org/10.1037/xge0001234', title: 'Social behavior and cognition' });
+    expect(res.facets['content-type']).toBe('publication');
+    expect(res.facets.annee).toBeUndefined();
+  });
+
+  it('créatures : un kraken mutant est aquatique, une harpie ailée aérienne', () => {
+    const eau = classify({ url: 'https://www.artstation.com/artwork/abc', title: 'Mutant Kraken - creature concept' });
+    expect(eau.primary).toBe('illustration');
+    expect(eau.subthemes.map((s) => s.slug)).toContain('creatures');
+    expect(eau.facets.element).toBe('eau');
+    const air = classify({ url: 'https://www.deviantart.com/x/art/1', title: 'Winged Harpy mutant creature' });
+    expect(air.subthemes.map((s) => s.slug)).toContain('creatures');
+    expect(air.facets.element).toBe('air');
+  });
+
+  it('Saint-Pétersbourg insolite, en latin et en cyrillique', () => {
+    const atlas = classify({
+      url: 'https://www.atlasobscura.com/things-to-do/saint-petersburg-russia',
+      title: 'Unusual things to do in Saint Petersburg, Russia',
+    });
+    expect(atlas.primary).toBe('lieux');
+    expect(atlas.subthemes.map((s) => s.slug)).toContain('insolite');
+    expect(atlas.facets.lieu).toBe('saint-petersbourg');
+    const ru = classify({ url: 'https://example.ru/zabroshennye', title: 'Заброшенные места Петербурга' });
+    expect(ru.subthemes.map((s) => s.slug)).toContain('insolite');
+    expect(ru.facets.lieu).toBe('saint-petersbourg');
+  });
+
+  it('sociologie de Saint-Pétersbourg sur cyberleninka', () => {
+    const res = classify({ url: 'https://cyberleninka.ru/article/n/sotsiologiya-goroda', title: 'Социология города: Санкт-Петербург' });
+    expect(res.primary).toBe('sociologie');
+    expect(res.facets['content-type']).toBe('publication');
+    expect(res.facets.lieu).toBe('saint-petersbourg');
+  });
+});
+
 describe('compileKeyword', () => {
   it('frontière de début de mot seulement', () => {
     expect(compileKeyword('ui').test('build')).toBe(false);

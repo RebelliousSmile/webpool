@@ -16,7 +16,8 @@
       "keywords": ["illustration", "artstation", "deviantart", "behance", "dribbble", "concept art", "sketch"],
       "children": [
         { "slug": "concept-art", "label": "Concept art", "keywords": ["concept art", "artstation", "environment design"] },
-        { "slug": "vector", "label": "Vectoriel", "keywords": ["vector", "svg", "vecteezy", "flaticon"] }
+        { "slug": "vector", "label": "Vectoriel", "keywords": ["vector", "svg", "vecteezy", "flaticon"] },
+        { "slug": "creatures", "label": "Créatures fantastiques", "keywords": ["creature", "créature", "monster", "monstre", "mutant", "mutation", "beast", "bête", "bestiar", "kaiju", "chimera", "chimère", "abomination", "cryptid", "kraken", "leviathan", "léviathan", "harpy", "harpie", "wyvern", "griffin", "gryphon"] }
       ]
     },
     {
@@ -40,6 +41,24 @@
       "slug": "patrimoine",
       "label": "Patrimoine & archives",
       "keywords": ["europeana", "archive", "museum", "musée", "heritage", "gallica", "public domain", "domaine public"]
+    },
+    {
+      "slug": "psychologie",
+      "label": "Psychologie",
+      "keywords": ["psy", "fpsyg", "cognit", "mental health", "santé mentale", "anxiety", "anxiété", "depression", "dépression", "emotion", "émotion", "personality", "personnalité", "wellbeing", "well-being", "behavior", "behaviour", "comportement", "neuroscien", "therapy", "thérapie", "психолог"]
+    },
+    {
+      "slug": "sociologie",
+      "label": "Sociologie & sciences sociales",
+      "keywords": ["sociolog", "социолог", "social science", "sciences sociales", "social research", "ethnograph", "этнограф", "anthropolog", "антрополог", "urban studies", "études urbaines", "urban sociology", "городские исследования"]
+    },
+    {
+      "slug": "lieux",
+      "label": "Lieux & curiosités",
+      "keywords": ["atlasobscura", "atlas obscura", "tripadvisor", "tourism", "tourisme", "things to do", "places to visit", "lieux", "visiter", "travel guide", "guide de voyage", "достопримечательност", "путеводител"],
+      "children": [
+        { "slug": "insolite", "label": "Insolite", "keywords": ["insolite", "unusual", "hidden gem", "secret", "abandon", "curiosit", "oddit", "obscur", "weird", "bizarre", "необычн", "заброшен", "секретн", "тайн"] }
+      ]
     }
   ],
   "facets": [
@@ -48,6 +67,7 @@
       "label": "Type de contenu",
       "values": [
         { "value": "video", "patterns": ["youtube.com", "vimeo.com", "youtu.be"] },
+        { "value": "publication", "patterns": ["doi.org", "doi:", "/doi/", "arxiv.org", "psyarxiv", "osf.io/preprints", "pubmed", "ncbi.nlm.nih.gov/pmc", "pmc.ncbi", "sciencedirect.com", "link.springer.com", "onlinelibrary.wiley.com", "frontiersin.org", "plos.org", "journals.", "nature.com/articles", "tandfonline.com", "sagepub.com", "psycnet.apa.org", "researchgate.net/publication", "semanticscholar.org", "mdpi.com", "cairn.info", "hal.science", "cyberleninka.ru", "elibrary.ru"] },
         { "value": "outil", "patterns": ["github.com", "gitlab.com", "app.", "tool"] },
         { "value": "galerie", "patterns": ["gallery", "galerie", "flickr.com", "artstation.com", "behance.net"] },
         { "value": "tutoriel", "patterns": ["tutorial", "tuto", "how-to", "guide", "docs."] },
@@ -72,12 +92,31 @@
         { "value": "nagasaki", "patterns": ["nagasaki", "長崎"] },
         { "value": "kyoto", "patterns": ["kyoto", "kyōto", "京都"] },
         { "value": "tokyo", "patterns": ["tokyo", "tōkyō", "東京"] },
+        { "value": "saint-petersbourg", "patterns": ["saint-petersburg", "saint petersburg", "st petersburg", "st. petersburg", "st-petersburg", "saint-pétersbourg", "saint pétersbourg", "petersbourg", "pétersbourg", "санкт-петербург", "петербург", "spb.ru", "leningrad", "ленинград"] },
         { "value": "autre", "patterns": [] }
+      ]
+    },
+    {
+      "slug": "element",
+      "label": "Élément",
+      "values": [
+        { "value": "eau", "patterns": ["water", "aquatic", "aquatique", "underwater", "sous-marin", "ocean", "océan", "marine", "sea monster", "sea creature", "sea serpent", "deep sea", "deep-sea", "abyss", "abysse", "kraken", "leviathan", "léviathan", "mermaid", "merfolk", "siren", "sirène", "amphibi", "lake monster", "river"] },
+        { "value": "air", "patterns": ["flying", "winged", "wings", "ailé", "volant", "sky", "skies", "ciel", "celestial", "céleste", "aerial", "aérien", "harpy", "harpie", "wyvern", "griffin", "gryphon", "griffon", "bird", "oiseau", "storm", "tempête"] }
+      ]
+    },
+    {
+      "slug": "annee",
+      "label": "Année",
+      "values": [
+        { "value": "2026", "patterns": ["2026"] },
+        { "value": "2025", "patterns": ["2025", "arxiv.org/abs/25", "arxiv.org/pdf/25"] },
+        { "value": "2024", "patterns": ["2024", "arxiv.org/abs/24", "arxiv.org/pdf/24"] }
       ]
     }
   ],
   "quality_domains": [
     "unsplash.com", "pexels.com", "flickr.com", "europeana.eu", "gallica.bnf.fr",
-    "artstation.com", "behance.net", "github.com", "civitai.com"
+    "artstation.com", "behance.net", "github.com", "civitai.com",
+    "doi.org", "pubmed.ncbi.nlm.nih.gov", "psyarxiv.com", "osf.io", "frontiersin.org", "cyberleninka.ru", "atlasobscura.com"
   ]
 }

@@ -1,0 +1,7 @@
+{
+  "theme": "lieux",
+  "subthemes": ["insolite"],
+  "facets": { "lieu": "saint-petersbourg" },
+  "order": "rarity",
+  "limit": 300
+}

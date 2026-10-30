@@ -1,0 +1,7 @@
+{
+  "theme": "illustration",
+  "subthemes": ["creatures"],
+  "facets": { "element": "eau" },
+  "order": "rarity",
+  "limit": 300
+}
