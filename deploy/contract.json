@@ -30,7 +30,7 @@
         "behavior": "fail"
       },
       "trigger": "manual",
-      "secretNames": ["DATABASE_URL", "BRAVE_API_KEY", "SEARXNG_URL", "EUROPEANA_API_KEY", "FLICKR_API_KEY"],
+      "secretNames": ["DATABASE_URL", "OPENROUTER_API_KEY", "BRAVE_API_KEY", "SEARXNG_URL", "EUROPEANA_API_KEY", "FLICKR_API_KEY"],
       "invocation": {
         "command": "pnpm run deploy:prod ad --apply",
         "workingDirectory": ".",
@@ -61,18 +61,21 @@
         "exclusive target lock (mkdir-based, fails immediately if held)",
         "~/www/webpool.env present on the target (target-authoritative, never transferred, outside the swapped ~/www/webpool)",
         "remote Node satisfies ^22.12.0 || >=24 under NODEJS_VERSION",
-        "git archive of the commit plus `pnpm install --prod --frozen-lockfile` succeed in a native Linux WSL staging directory (not DrvFs)"
+        "git archive of the commit plus `pnpm install --prod --frozen-lockfile` succeed in a native Linux WSL staging directory (not DrvFs)",
+        "the alwaysdata scheduled task (`node bin/webpool.js cycle --budget 20` in ~/www/webpool, NODEJS_VERSION=24, cron `0 4 * * 1`) is not running: it is target-authoritative, created in the admin and never deployed, and it runs from the directory the swap replaces",
+        "~/www/webpool-data (example queries and pool definitions imported on the target) is target-authoritative and outside the swapped ~/www/webpool; it is never shipped nor deleted"
       ],
       "proof": [
         "rsync exits 0 into ~/www/webpool.new with --chmod=D755,F644",
         "find over ~/www/webpool.new reports no directory other than 755 and no file other than 644",
         "`webpool stats` exits 0 from ~/www/webpool.new before the swap",
+        "rsync mirrors code only: /.env and /.htaccess are excluded from deletion and written by the script",
         "after the swap, ~/www/webpool/.env is a symlink to ~/www/webpool.env, ~/www/webpool/.htaccess denies all web access and ~/www/webpool/bin/webpool.js exists"
       ],
       "recovery": ["swap ~/www/webpool.old back over ~/www/webpool; ~/www/webpool.old is only purged at the START of the next deploy:code, so it survives until then"],
       "sync": {
         "comparison": "content-hash",
-        "deletions": "mirror code only; /.env and /.htaccess are excluded and written by the script",
+        "deletions": "mirror",
         "resumable": true
       }
     },

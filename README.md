@@ -359,14 +359,27 @@ synchronise dans `~/www/webpool.new` (droits 755/644 vérifiés), y pose un `.ht
 jusqu'au déploiement suivant ; les commandes de restauration sont affichées en fin
 de run. Une étape en échec arrête tout avant la bascule.
 
+**Données.** Les requêtes et pools d'exemple ne partent pas avec le code : ils
+sont copiés une fois dans `~/www/webpool-data/<exemple>/` (`queries.json`,
+`pools/*.json`), puis importés sur la cible par `query import` et `pool create`.
+Ce répertoire est hors de `~/www/webpool`, donc la bascule ne le touche pas ; la
+base reste la seule source de vérité.
+
 **Tâches planifiées** (*Avancé > Tâches planifiées*, syntaxe cron). Le CLI lit
 `.env` à la racine du dépôt quel que soit le répertoire courant, et sort en code 1
-sur erreur, ce qui déclenche le mail d'erreur d'alwaysdata. Exemple de chaîne
-quotidienne :
+sur erreur, ce qui déclenche le mail d'erreur d'alwaysdata. La tâche en place est
+créée dans l'admin, pas par le script de déploiement :
 
-```
-30 3 * * *  cd $HOME/www/webpool && NODEJS_VERSION=24 node bin/webpool.js cycle --budget 20
-```
+| Champ | Valeur |
+|---|---|
+| Commande | `node bin/webpool.js cycle --budget 20` |
+| Répertoire de travail | `www/webpool` |
+| Environnement | `NODEJS_VERSION=24` |
+| Fréquence | `0 4 * * 1` (lundi, 4 h) |
+
+Avec 20 appels par semaine, le coût reste autour de 0,11 $ (OpenRouter, moteur
+Perplexity). Ne pas déployer pendant un passage : la tâche tourne dans le
+répertoire que la bascule remplace.
 
 `cycle` explore, normalise, classe et rafraîchit tous les pools. Pour une chaîne
 à la main sans exploration, enchaîner `ingest`, `normalize`, `classify` et un
