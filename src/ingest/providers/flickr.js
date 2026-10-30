@@ -2,7 +2,8 @@ import { config } from '../../config.js';
 import { fetchJson, requireConfig } from './http.js';
 
 // Provider Flickr (flickr.photos.search), clé gratuite via FLICKR_API_KEY.
-export function buildUrl(query, key, limit = 20) {
+// `page` part de 0 ; Flickr compte ses pages à partir de 1.
+export function buildUrl(query, key, limit = 20, page = 0) {
   const url = new URL('https://www.flickr.com/services/rest/');
   url.searchParams.set('method', 'flickr.photos.search');
   url.searchParams.set('api_key', key);
@@ -11,6 +12,7 @@ export function buildUrl(query, key, limit = 20) {
   url.searchParams.set('per_page', String(Math.min(limit, 100)));
   url.searchParams.set('format', 'json');
   url.searchParams.set('nojsoncallback', '1');
+  if (page > 0) url.searchParams.set('page', String(page + 1));
   return url;
 }
 
@@ -26,7 +28,7 @@ export function mapResponse(data) {
   }));
 }
 
-export async function search({ query, limit }, { fetchImpl, apiKey = config.flickrApiKey } = {}) {
+export async function search({ query, limit, page }, { fetchImpl, apiKey = config.flickrApiKey } = {}) {
   const key = requireConfig('flickr', apiKey, 'FLICKR_API_KEY');
-  return mapResponse(await fetchJson('Flickr', buildUrl(query, key, limit), { fetchImpl }));
+  return mapResponse(await fetchJson('Flickr', buildUrl(query, key, limit, page), { fetchImpl }));
 }

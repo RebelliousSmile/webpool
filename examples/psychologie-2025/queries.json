@@ -1,0 +1,20 @@
+{
+  "queries": [
+    { "provider": "brave", "query": "psychology study 2025 doi", "tags": ["sujet:psychologie", "annee:2025", "lang:en"] },
+    { "provider": "brave", "query": "psychology meta-analysis 2025", "tags": ["sujet:psychologie", "annee:2025", "lang:en"] },
+    { "provider": "brave", "query": "site:psyarxiv.com 2025", "tags": ["sujet:psychologie", "annee:2025", "lang:en"] },
+    { "provider": "brave", "query": "site:osf.io preprints psychology 2025", "tags": ["sujet:psychologie", "annee:2025", "lang:en"] },
+    { "provider": "brave", "query": "site:frontiersin.org psychology 2025", "tags": ["sujet:psychologie", "annee:2025", "lang:en"] },
+    { "provider": "brave", "query": "site:pubmed.ncbi.nlm.nih.gov psychology 2025", "tags": ["sujet:psychologie", "annee:2025", "lang:en"] },
+    { "provider": "brave", "query": "site:nature.com nature human behaviour 2025", "tags": ["sujet:psychologie", "annee:2025", "lang:en"] },
+    { "provider": "brave", "query": "cognitive psychology journal article 2025", "tags": ["sujet:psychologie", "annee:2025", "lang:en"] },
+    { "provider": "brave", "query": "social psychology replication 2025", "tags": ["sujet:psychologie", "annee:2025", "lang:en"] },
+    { "provider": "brave", "query": "clinical psychology randomized trial 2025", "tags": ["sujet:psychologie", "annee:2025", "lang:en"] },
+    { "provider": "brave", "query": "developmental psychology longitudinal study 2025", "tags": ["sujet:psychologie", "annee:2025", "lang:en"] },
+    { "provider": "brave", "query": "article psychologie 2025 revue scientifique", "tags": ["sujet:psychologie", "annee:2025", "lang:fr"] },
+    { "provider": "brave", "query": "site:cairn.info psychologie 2025", "tags": ["sujet:psychologie", "annee:2025", "lang:fr"] },
+    { "provider": "brave", "query": "site:hal.science psychologie 2025", "tags": ["sujet:psychologie", "annee:2025", "lang:fr"] },
+    { "provider": "brave", "query": "психология исследование 2025 статья", "tags": ["sujet:psychologie", "annee:2025", "lang:ru"] },
+    { "provider": "brave", "query": "psychologie Studie 2025 Fachzeitschrift", "tags": ["sujet:psychologie", "annee:2025", "lang:de"] }
+  ]
+}

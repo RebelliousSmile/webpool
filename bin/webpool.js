@@ -9,6 +9,9 @@ import fs from 'node:fs';
 import { createPool, refreshPool, listPools, showPool, loadPoolForExport } from '../src/pools/index.js';
 import { formatPool } from '../src/pools/export.js';
 import { stats } from '../src/stats.js';
+import { assertUsage, listDomains, qualifyDomain, setExploreExcluded } from '../src/domains/index.js';
+import { addQuery, explore, importQueries, listQueries, parseTags } from '../src/explore/index.js';
+import { cycle } from '../src/cycle/index.js';
 
 const HELP = `webpool — pipeline d'URLs : ingestion, normalisation, classification, pools
 
@@ -21,13 +24,22 @@ Usage :
   webpool pool show --slug <slug>
   webpool pool export --slug <slug> [--format json|csv|md] [--out fichier]
   webpool pool list
+  webpool domain list [--to-qualify] [--limit N]
+  webpool domain set --domain <domaine> --usage libre|sous-conditions|payant|non-commercial [--note "…"]
+  webpool domain exclude --domain <domaine>   (écarté des requêtes Brave par -site:, en plus des domaines saturés)
+  webpool domain include --domain <domaine>
+  webpool query add --provider <p> --query "…" [--tags a,b]
+  webpool query import --file requetes.json      (liste de {provider, query, tags})
+  webpool query list [--status active|exhausted|paused]
+  webpool explore --budget N [--provider p] [--limit N]   (au plus N appels aux providers)
+  webpool cycle --budget N [--provider p] [--offline]   (explore, normalize et classify jusqu'à vider la file, refresh des pools)
   webpool stats
   webpool migrate                         (applique les migrations db/migrations manquantes)
 `;
 
 const OPTIONS = {
   query: { type: 'string' },
-  provider: { type: 'string', default: 'file' },
+  provider: { type: 'string' },
   input: { type: 'string' },
   limit: { type: 'string' },
   offline: { type: 'boolean', default: false },
@@ -38,14 +50,21 @@ const OPTIONS = {
   file: { type: 'string' },
   format: { type: 'string', default: 'json' },
   out: { type: 'string' },
+  domain: { type: 'string' },
+  usage: { type: 'string' },
+  note: { type: 'string' },
+  'to-qualify': { type: 'boolean', default: false },
+  tags: { type: 'string' },
+  status: { type: 'string' },
+  budget: { type: 'string' },
   help: { type: 'boolean', short: 'h', default: false },
 };
 
 // Valide avant toute connexion à la base.
-function parseLimit(raw) {
+function parsePositive(name, raw) {
   if (raw === undefined) return undefined;
   const n = Number(raw);
-  if (!/^\d+$/.test(raw.trim()) || n <= 0) throw new Error(`--limit doit être un entier > 0 (reçu : "${raw}")`);
+  if (!/^\d+$/.test(raw.trim()) || n <= 0) throw new Error(`--${name} doit être un entier > 0 (reçu : "${raw}")`);
   return n;
 }
 
@@ -60,12 +79,12 @@ async function main() {
     console.log(HELP);
     return;
   }
-  const limit = parseLimit(values.limit);
+  const limit = parsePositive('limit', values.limit);
 
   switch (command) {
     case 'ingest': {
       const res = await ingest({
-        provider: values.provider,
+        provider: values.provider ?? 'file',
         searchQuery: values.query,
         input: values.input,
         limit,
@@ -120,6 +139,85 @@ async function main() {
       } else {
         throw new Error(`Sous-commande pool inconnue : ${subcommand ?? '(aucune)'}`);
       }
+      break;
+    }
+    case 'domain': {
+      if (subcommand === 'list') {
+        const rows = await listDomains({ toQualify: values['to-qualify'], limit });
+        for (const d of rows) {
+          const seen = d.first_seen_at.toISOString().slice(0, 10);
+          console.log(
+            `${String(d.urls).padStart(5)}  ${(d.usage_commercial ?? 'à qualifier').padEnd(15)}  ${d.domain}  (vu le ${seen}${d.first_query ? ` par « ${d.first_query} »` : ''})${d.explore_excluded ? '  [exclu]' : ''}`,
+          );
+        }
+        if (rows.length === 0) console.log('(aucun domaine)');
+      } else if (subcommand === 'set') {
+        if (!values.domain || !values.usage) throw new Error('domain set : --domain et --usage requis');
+        assertUsage(values.usage);
+        const res = await qualifyDomain({ domain: values.domain, usage: values.usage, note: values.note });
+        console.log(
+          res.rewritten === null
+            ? `Domaine ${res.domain} qualifié « ${res.usage} » ; facette usage-commercial absente de la base (lancer classify) : aucune URL réécrite.`
+            : `Domaine ${res.domain} qualifié « ${res.usage} » : ${res.rewritten} URLs mises à jour.`,
+        );
+      } else if (subcommand === 'exclude' || subcommand === 'include') {
+        if (!values.domain) throw new Error(`domain ${subcommand} : --domain requis`);
+        const res = await setExploreExcluded({ domain: values.domain, excluded: subcommand === 'exclude' });
+        console.log(
+          res.excluded
+            ? `Domaine ${res.domain} exclu de l'exploration.`
+            : `Domaine ${res.domain} réintégré (reste exclu s'il est saturé).`,
+        );
+      } else {
+        throw new Error(`Sous-commande domain inconnue : ${subcommand ?? '(aucune)'}`);
+      }
+      break;
+    }
+    case 'query': {
+      if (subcommand === 'add') {
+        if (!values.provider || !values.query) throw new Error('query add : --provider et --query requis');
+        const res = await addQuery({ provider: values.provider, query: values.query, tags: parseTags(values.tags) });
+        console.log(`Requête #${res.id} ajoutée (${res.provider}) : « ${res.query} »${res.tags.length ? ` [${res.tags.join(', ')}]` : ''}.`);
+      } else if (subcommand === 'import') {
+        if (!values.file) throw new Error('query import : --file requis');
+        const res = await importQueries(values.file);
+        console.log(`Requêtes importées : ${res.added} ajoutées, ${res.skipped} déjà connues.`);
+      } else if (subcommand === 'list') {
+        const rows = await listQueries({ status: values.status });
+        for (const q of rows) {
+          const prio = q.priority === Infinity ? 'neuve' : q.priority.toFixed(2);
+          console.log(
+            `#${String(q.id).padEnd(4)} ${q.status.padEnd(9)} ${q.provider.padEnd(9)} p.${q.nextPage}  ${String(q.runs).padStart(3)} passages  ${String(q.newDomains).padStart(4)} domaines  prio ${prio}  ${q.query}${q.tags.length ? `  [${q.tags.join(', ')}]` : ''}`,
+          );
+        }
+        if (rows.length === 0) console.log('(aucune requête)');
+      } else {
+        throw new Error(`Sous-commande query inconnue : ${subcommand ?? '(aucune)'}`);
+      }
+      break;
+    }
+    case 'explore': {
+      const budget = parsePositive('budget', values.budget);
+      if (budget === undefined) throw new Error('explore : --budget requis');
+      const res = await explore({ budget, provider: values.provider, limit });
+      for (const q of res.queries) {
+        console.log(
+          q.error
+            ? `  #${q.id} ${q.provider} p.${q.page} : erreur — ${q.error}`
+            : `  #${q.id} ${q.servedBy === q.provider ? q.provider : `${q.provider}→${q.servedBy} (repli : ${q.fallbackError})`} p.${q.page}${q.excluded ? ` (-${q.excluded} domaines)` : ''} : ${q.results} résultats, ${q.newUrls} URLs nouvelles, ${q.newDomains} domaines nouveaux${q.exhausted ? ' (épuisée)' : ''}  « ${q.query} »`,
+        );
+      }
+      console.log(
+        `Explore run #${res.runId} : ${res.calls} appels, ${res.newUrls} URLs nouvelles, ${res.newDomains} domaines nouveaux, ${res.errors} erreurs${res.woken ? `, ${res.woken} requêtes reposées réactivées` : ''}.`,
+      );
+      break;
+    }
+    case 'cycle': {
+      const budget = parsePositive('budget', values.budget);
+      if (budget === undefined) throw new Error('cycle : --budget requis');
+      const res = await cycle({ budget, provider: values.provider, offline: values.offline, exploreOptions: { limit } });
+      for (const s of res.steps) console.log(`${s.name.padEnd(9)} ${s.ok ? 'ok    ' : 'ÉCHEC '} ${s.line}`);
+      if (!res.ok) process.exitCode = 1;
       break;
     }
     case 'migrate': {

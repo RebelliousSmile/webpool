@@ -36,6 +36,42 @@ describe('CLI', () => {
     expect(stderr).toContain('Sous-commande pool inconnue : frobnicate');
   });
 
+  it('refuse une sous-commande domain inconnue avec le code 1', async () => {
+    const { code, stderr } = await cli('domain', 'frobnicate');
+    expect(code).toBe(1);
+    expect(stderr).toContain('Sous-commande domain inconnue : frobnicate');
+  });
+
+  it('refuse --usage hors liste avant toute connexion', async () => {
+    const { code, stderr } = await cli('domain', 'set', '--domain', 'a.com', '--usage', 'gratuit');
+    expect(code).toBe(1);
+    expect(stderr).toContain('--usage invalide : "gratuit" (attendu : libre, sous-conditions, payant, non-commercial)');
+  });
+
+  it('domain exclude exige --domain avant toute connexion', async () => {
+    const { code, stderr } = await cli('domain', 'exclude');
+    expect(code).toBe(1);
+    expect(stderr).toContain('domain exclude : --domain requis');
+  });
+
+  it('refuse une sous-commande query inconnue avec le code 1', async () => {
+    const { code, stderr } = await cli('query', 'frobnicate');
+    expect(code).toBe(1);
+    expect(stderr).toContain('Sous-commande query inconnue : frobnicate');
+  });
+
+  it.each([[[]], [['--budget=0']], [['--budget=abc']]])('explore refuse un budget absent ou invalide (%j)', async (args) => {
+    const { code, stderr } = await cli('explore', ...args);
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/--budget (requis|doit être un entier > 0)/);
+  });
+
+  it.each([[[]], [['--budget=0']]])('cycle refuse un budget absent ou invalide (%j)', async (args) => {
+    const { code, stderr } = await cli('cycle', ...args);
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/--budget (requis|doit être un entier > 0)/);
+  });
+
   it.each([['abc'], ['-3'], ['0'], ['1.5']])('refuse --limit=%s avec le code 1', async (value) => {
     const { code, stderr } = await cli('classify', `--limit=${value}`);
     expect(code).toBe(1);

@@ -1,0 +1,7 @@
+{
+  "theme": "illustration",
+  "subthemes": ["creatures"],
+  "facets": { "element": "air" },
+  "order": "rarity",
+  "limit": 300
+}

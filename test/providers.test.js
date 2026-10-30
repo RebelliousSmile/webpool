@@ -5,6 +5,7 @@ import * as brave from '../src/ingest/providers/brave.js';
 import * as searxng from '../src/ingest/providers/searxng.js';
 import * as europeana from '../src/ingest/providers/europeana.js';
 import * as flickr from '../src/ingest/providers/flickr.js';
+import * as openrouter from '../src/ingest/providers/openrouter.js';
 import { normalizeResults } from '../src/ingest/providers/file.js';
 
 describe('provider file — normalizeResults', () => {
@@ -35,7 +36,7 @@ const jsonResponse = (body, status = 200) =>
 
 describe('providers SERP — contrat {url, rank, title}', () => {
   it('sont tous enregistrés derrière la même abstraction', () => {
-    expect(Object.keys(providers).sort()).toEqual(['brave', 'europeana', 'file', 'flickr', 'searxng']);
+    expect(Object.keys(providers).sort()).toEqual(['brave', 'europeana', 'file', 'flickr', 'openrouter', 'searxng']);
     for (const impl of Object.values(providers)) expect(typeof impl.search).toBe('function');
   });
 
@@ -89,6 +90,28 @@ describe('providers SERP — contrat {url, rank, title}', () => {
     expect(res).toHaveLength(2);
   });
 
+  it('page : sans page, aucun paramètre de pagination ; sinon chaque provider traduit la page 0-based', () => {
+    const params = (url) => Object.fromEntries(url.searchParams);
+    expect(params(brave.buildUrl('q', 20))).not.toHaveProperty('offset');
+    expect(params(brave.buildUrl('q', 20, 0))).not.toHaveProperty('offset');
+    expect(params(brave.buildUrl('q', 20, 3)).offset).toBe('3');
+    expect(params(searxng.buildUrl('http://s', 'q'))).not.toHaveProperty('pageno');
+    expect(params(searxng.buildUrl('http://s', 'q', 2)).pageno).toBe('3');
+    expect(params(flickr.buildUrl('q', 'K', 20))).not.toHaveProperty('page');
+    expect(params(flickr.buildUrl('q', 'K', 20, 1)).page).toBe('2');
+    expect(params(europeana.buildUrl('q', 'K', 20))).not.toHaveProperty('start');
+    expect(params(europeana.buildUrl('q', 'K', 20, 2)).start).toBe('41');
+  });
+
+  it('search : transmet la page au provider', async () => {
+    let seen;
+    await brave.search(
+      { query: 'q', page: 4 },
+      { apiKey: 'BK', fetchImpl: async (url) => ((seen = new URL(url)), jsonResponse(fixture('brave-response.json'))) },
+    );
+    expect(seen.searchParams.get('offset')).toBe('4');
+  });
+
   it('search : clé ou URL absente → message explicite, erreur HTTP → message lisible', async () => {
     await expect(europeana.search({ query: 'q' }, { apiKey: '' })).rejects.toThrow(/EUROPEANA_API_KEY manquante/);
     await expect(searxng.search({ query: 'q' }, { baseUrl: '' })).rejects.toThrow(/SEARXNG_URL manquante/);
@@ -98,5 +121,52 @@ describe('providers SERP — contrat {url, rank, title}', () => {
     await expect(
       brave.search({ query: 'q' }, { apiKey: 'BK', fetchImpl: async () => jsonResponse({}, 401) }),
     ).rejects.toThrow(/Brave Search : HTTP 401 \(clé API refusée\)/);
+  });
+});
+
+describe('provider openrouter — plugin web', () => {
+  it('mappe les annotations url_citation : titre vide → null, doublon et autre type ignorés', () => {
+    expect(openrouter.mapResponse(fixture('openrouter-response.json'))).toEqual([
+      { url: 'https://urban3p.ru/spb/1', rank: 1, title: 'Заброшенный завод' },
+      { url: 'https://example.com/no-title', rank: 2, title: null },
+    ]);
+    expect(openrouter.mapResponse({})).toEqual([]);
+  });
+
+  it('corps : moteur, max_results plafonné à 20, exclude_domains seulement si non vide', () => {
+    const body = openrouter.buildBody('q', { limit: 50, engine: 'exa', model: 'm' });
+    expect(body).toMatchObject({ model: 'm', max_tokens: 5, plugins: [{ id: 'web', engine: 'exa', max_results: 20 }] });
+    expect(body.plugins[0]).not.toHaveProperty('exclude_domains');
+    expect(body.messages[0].content).toContain('q');
+    const excluding = openrouter.buildBody('q', { excludeDomains: ['reddit.com'] });
+    expect(excluding.plugins[0]).toMatchObject({ engine: 'perplexity', exclude_domains: ['reddit.com'] });
+    expect(() => openrouter.buildBody('q', { engine: 'google' })).toThrow(/Moteur OpenRouter inconnu : google/);
+  });
+
+  it('search : POST JSON avec la clé, page ignorée, exclusion transmise', async () => {
+    let seen;
+    const res = await openrouter.search(
+      { query: 'q', limit: 20, page: 3, excludeDomains: ['a.com'] },
+      {
+        apiKey: 'OK',
+        engine: 'parallel',
+        model: 'm',
+        fetchImpl: async (url, init) => ((seen = { url, init }), jsonResponse(fixture('openrouter-response.json'))),
+      },
+    );
+    expect(seen.url).toBe('https://openrouter.ai/api/v1/chat/completions');
+    expect(seen.init.method).toBe('POST');
+    expect(seen.init.headers).toMatchObject({ Authorization: 'Bearer OK', 'Content-Type': 'application/json' });
+    expect(JSON.parse(seen.init.body).plugins[0]).toEqual({
+      id: 'web', engine: 'parallel', max_results: 20, exclude_domains: ['a.com'],
+    });
+    expect(res).toHaveLength(2);
+  });
+
+  it('search : clé absente → message explicite, crédit épuisé → HTTP 402 lisible', async () => {
+    await expect(openrouter.search({ query: 'q' }, { apiKey: '' })).rejects.toThrow(/OPENROUTER_API_KEY manquante/);
+    await expect(
+      openrouter.search({ query: 'q' }, { apiKey: 'K', fetchImpl: async () => jsonResponse({}, 402) }),
+    ).rejects.toThrow(/OpenRouter : HTTP 402 \(crédit épuisé\)/);
   });
 });

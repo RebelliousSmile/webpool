@@ -1,0 +1,6 @@
+{
+  "theme": "psychologie",
+  "facets": { "content-type": "publication", "annee": "2025" },
+  "order": "composite",
+  "limit": 1000
+}

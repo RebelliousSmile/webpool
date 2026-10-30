@@ -1,6 +1,6 @@
 ---
 objective: "Une commande planifiable fait découvrir à webpool, run après run, des domaines qu'il ne connaissait pas, pour tout type de ressource, et le droit d'usage commercial devient une facette qualifiée une fois par domaine."
-status: pending
+status: in-progress
 ---
 
 <!-- Fill or omit these sections; never add, rename, or reorder one. -->
@@ -31,6 +31,7 @@ status: pending
 | ------ | -------- |
 | https://api-dashboard.search.brave.com/app/documentation/web-search/query | `count` ≤ 20 ; `offset` = numéro de page 0-based, max 9 (donc 200 résultats par requête au plus) ; les opérateurs (`site:`, `-terme`, guillemets) vont dans `q`. `-site:` n'y est pas documenté ; aucune longueur maximale de `q` n'y est indiquée. |
 | Essai réel du 2026-10-30 (Brave, depuis alwaysdata) | `site:` est respecté (24 requêtes, 0 résultat hors site) ; `-site:gettyimages.com` a écarté gettyimages.com mais pas gettyimages.co.uk ; les requêtes en japonais font émerger des domaines absents des requêtes anglaises (blue-wind.net, yunphoto.net, publicdomainq.net, pakutaso.com, goto-stock.com). |
+| Essai `-site:` du 2026-10-30, phase 3 (Brave, depuis alwaysdata) | « free stock photo japan temple » : sans exclusion, 19 résultats dont pexels.com et unsplash.com ; avec `-site:unsplash.com -site:pexels.com` (65 car.), 17 résultats, aucun des deux ; avec 18 `-site:` (378 car.), 17 résultats, aucune fuite, et des domaines absents des deux autres passages (lummi.ai, stockfreeimages.com, pakutaso.com, picryl.com, scapestock.net). L'opérateur est respecté et une requête de 378 caractères est acceptée : la phase est menée en entier. |
 
 ## Decisions
 

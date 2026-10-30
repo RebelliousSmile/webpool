@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { query, withTransaction } from '../db.js';
 import { withRun } from '../run.js';
+import { registerDomains } from '../domains/index.js';
 import { createFetcher, mapLimit, HttpError } from './fetcher.js';
 import { canonicalizeUrl, domainOf, extractCanonicalLink, extractTitle } from './normalizer.js';
 
@@ -39,6 +40,13 @@ async function normalizeOne(item, runId, page) {
   const domain = domainOf(canonical);
 
   return withTransaction(async (client) => {
+    // Une redirection peut mener à un domaine que l'ingestion n'a pas vu.
+    const { rows: first } = await client.query(
+      'SELECT query FROM url_source WHERE url_item_id = $1 ORDER BY discovered_at, id LIMIT 1',
+      [item.id],
+    );
+    await registerDomains(client, [domain], first[0]?.query ?? null);
+
     // Déduplication : domaine + URL canonique (US-04).
     const dup = await client.query(
       `SELECT id FROM url_item

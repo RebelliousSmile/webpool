@@ -42,6 +42,22 @@ describe('buildPoolQuery', () => {
   it("n'accepte que des ordres connus (liste blanche)", () => {
     expect(buildPoolQuery({ order: 'quality' }).text).toContain('ui.quality_score DESC');
     expect(() => buildPoolQuery({ order: 'id; DROP TABLE pool' })).toThrow(/Ordre inconnu/);
+    expect(() => buildPoolQuery({ order: 'rare' })).toThrow(/attendu : quality, relevance, recent, composite, rarity/);
+  });
+
+  it('rarity : jointure du nombre d’URLs par domaine, ajoutée pour cet ordre seulement', () => {
+    const { text } = buildPoolQuery({ order: 'rarity' });
+    expect(text).toContain("LEFT JOIN (SELECT domain, count(*) AS urls FROM url_item");
+    expect(text).toContain("status <> 'duplicate'");
+    expect(text).toContain('1 / sqrt(coalesce(dc.urls, 1)) AS pool_score');
+    expect(text).toContain('ORDER BY 1 / sqrt(coalesce(dc.urls, 1)) DESC, ui.quality_score DESC NULLS LAST, ui.id');
+    expect(buildPoolQuery({ order: 'quality' }).text).not.toContain('LEFT JOIN');
+  });
+
+  it('recent : score lisible décroissant avec l’âge, ordre par découverte', () => {
+    const { text } = buildPoolQuery({ order: 'recent' });
+    expect(text).toContain('ORDER BY ui.first_seen_at DESC, ui.id');
+    expect(text).not.toMatch(/0 AS pool_score/);
   });
 
   it('rejette les critères inconnus', () => {

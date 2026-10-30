@@ -85,6 +85,7 @@ pnpm webpool ingest --query "forest lora" --provider brave
 pnpm webpool ingest --query "forest lora" --provider searxng     # SEARXNG_URL
 pnpm webpool ingest --query "forêt" --provider europeana        # EUROPEANA_API_KEY
 pnpm webpool ingest --query "forest" --provider flickr          # FLICKR_API_KEY
+pnpm webpool ingest --query "forest lora" --provider openrouter  # OPENROUTER_API_KEY
 
 pnpm webpool normalize            # suit les redirections, canonise, déduplique
 pnpm webpool normalize --offline  # sans réseau : canonise l'URL brute
@@ -119,6 +120,19 @@ Exemple de définition de pool (lisible et réexécutable) :
   "limit": 50
 }
 ```
+
+Ordres (`order`) et score affiché par `pool show` :
+
+| Ordre | Rang | Score |
+| ----- | ---- | ----- |
+| `composite` (défaut) | moyenne pertinence et qualité, décroissante | cette moyenne |
+| `quality` | qualité décroissante | la qualité |
+| `relevance` | pertinence décroissante | la pertinence |
+| `recent` | découverte la plus récente d'abord | `1 / (1 + jours depuis la découverte)` |
+| `rarity` | domaines les moins représentés d'abord, puis qualité | `1 / sqrt(URLs du domaine)`, doublons exclus : 1 pour un domaine à une seule URL |
+
+À rang égal, l'id de l'URL départage : deux `pool refresh` sur le même corpus donnent
+le même ordre.
 
 ### Schéma et migrations
 
@@ -188,9 +202,118 @@ d'URL canonique, sans fusion avec l'autre site.
 | `searxng` | `SEARXNG_URL` | méta-moteur auto-hébergé, sans clé ; format JSON à activer |
 | `europeana` | `EUROPEANA_API_KEY` | patrimoine culturel |
 | `flickr` | `FLICKR_API_KEY` | photographie |
+| `openrouter` | `OPENROUTER_API_KEY` | plugin web d'OpenRouter ; repli sur `brave` dans `explore` |
+
+Le provider `openrouter` lit les URLs dans les annotations `url_citation` du
+plugin `web`, qui rendent tous les résultats de recherche : la réponse du modèle
+n'est jamais lue. `OPENROUTER_ENGINE` choisit le moteur (`perplexity` par défaut,
+`exa`, `parallel`), `OPENROUTER_MODEL` le modèle (`openai/gpt-4.1-nano` par
+défaut, 5 tokens de sortie au plus) et `OPENROUTER_TIMEOUT_MS` le délai d'appel
+(60 s par défaut). Sur 5 requêtes de test, Perplexity coûtait environ 0,0055 $
+l'appel de 20 résultats, Exa 0,0175 $ et Parallel 0,016 $, et 70 à 75 % des
+domaines trouvés étaient absents des résultats de Brave. Ce provider ne pagine
+pas : une requête s'épuise au premier passage, puis revient après le repos.
 
 Google Custom Search n'est pas retenu : l'API est fermée aux nouveaux clients et
 s'arrête le 1er janvier 2027.
+
+## Exploration : des sources de plus en plus rares
+
+`ingest` lance une requête une fois. La boucle d'exploration relance des
+requêtes enregistrées, page après page. Elle classe ces requêtes selon les
+nouveaux domaines qu'elles ont fait découvrir, abandonne celles qui sont épuisées
+et écarte des requêtes Brave les domaines déjà bien représentés. Au fil des
+passages, le corpus s'ouvre ainsi à des sources rares. Cela vaut pour toute
+ressource : le droit d'usage commercial n'est qu'une facette parmi d'autres.
+
+```bash
+# Frontière de requêtes (table search_query)
+pnpm webpool query add --provider brave --query "長崎 写真 フリー素材" --tags lieu:nagasaki,lang:ja
+pnpm webpool query import --file examples/japon/queries.json   # tableau ou {queries: []}, validé en entier avant insertion
+pnpm webpool query list [--status active|exhausted|paused]     # page suivante, passages, domaines nouveaux, priorité
+
+# Un passage : au plus N appels aux providers, une page par requête choisie
+pnpm webpool explore --budget 20 [--provider brave] [--limit 20]
+
+# Le cycle complet, pour une tâche planifiée
+pnpm webpool cycle --budget 20 [--provider brave] [--offline]
+
+# Registre des domaines (table domain_profile)
+pnpm webpool domain list [--to-qualify] [--limit N]            # URLs par domaine, usage, première requête, [exclu]
+pnpm webpool domain set --domain photo-ac.com --usage libre [--note "…"]
+pnpm webpool domain exclude --domain pinterest.com             # toujours écarté des requêtes Brave
+pnpm webpool domain include --domain pinterest.com             # réintégré (reste écarté s'il est saturé)
+```
+
+**Frontière.** Une requête jamais lancée passe en premier. Les autres sont
+classées par domaines nouveaux par passage, selon la formule
+`domaines / (passages + 1)`. À priorité égale, la requête lancée le moins
+récemment passe d'abord. Chaque passage réussi avance la requête d'une page :
+Brave reçoit `offset`, SearXNG `pageno`, Flickr `page` et Europeana `start`. Une
+requête est épuisée après la page 9, ou après `WEBPOOL_EXPLORE_DRY_RUNS`
+passages consécutifs sans URL nouvelle. Elle revient alors, depuis la page 0,
+après `WEBPOOL_EXPLORE_REST_DAYS` jours. Une erreur de provider est notée sur la
+requête (`search_query_run.error`) sans faire avancer la page ni arrêter le
+run. Une requête `openrouter` dont l'appel échoue (réseau, crédit épuisé, clé
+absente…) est relancée sur Brave, page 0 : le passage compte, les URLs sont
+tracées sous `brave`, mais la requête garde sa page et son état. La sortie
+d'`explore` l'indique par `openrouter→brave (repli : …)`. Pour le provider `file`, la requête est le chemin de l'export, et `{page}`
+y est remplacé par le numéro de page.
+
+**Exclusion des domaines saturés.** Avant chaque appel à Brave, la requête reçoit
+un suffixe `-site:` par domaine saturé : un domaine qui compte plus de
+`WEBPOOL_EXPLORE_SATURATION` URLs normalisées ou classées, ou qui a été exclu
+avec `domain exclude`. Les domaines les plus gros passent en premier. Le suffixe
+s'arrête dès que la requête dépasserait `WEBPOOL_EXPLORE_QUERY_MAX_CHARS`
+caractères. Un domaine visé par un `site:` de la requête n'est jamais exclu. Si
+l'ensemble exclu change, la requête repart de la page 0. OpenRouter reçoit les mêmes
+domaines, au plus 50, dans le paramètre `exclude_domains`, sans toucher à la
+requête.
+
+**Registre et facette `usage-commercial`.** Chaque domaine découvert entre dans
+le registre, avec la date et la requête de sa découverte. Il y reste « à
+qualifier » tant que `domain set` ne lui a pas donné d'usage : `libre`,
+`sous-conditions`, `payant` ou `non-commercial`. La qualification réécrit la
+facette des URLs déjà classées, sans reclasser. À la classification, elle
+l'emporte sur les motifs de la taxonomie. Faute de qualification, la facette
+vaut `a-qualifier`, sauf si un motif de la taxonomie s'applique.
+
+**Cycle.** `cycle` enchaîne `explore`, puis `normalize` et `classify` par lots
+de 100 jusqu'à vider la file, puis `pool refresh` de chaque pool. Il affiche
+une ligne par étape : appels et requêtes en échec, URLs et domaines nouveaux,
+domaines à qualifier, taille de chaque pool. Une étape en échec n'empêche pas
+les suivantes. Le code de sortie vaut 1 si une étape échoue entièrement :
+exception, échec de chaque appel aux providers, ou échec de chaque pool.
+
+Exemple : le jeu [`examples/japon/`](examples/japon/) contient 24 requêtes
+(japonais, anglais, français ; tags `lieu:*` et `lang:*`) et des pools par lieu
+en ordre `rarity`, dont `nagasaki-libre` (`usage-commercial` = `libre`) :
+
+```bash
+pnpm webpool query import --file examples/japon/queries.json
+pnpm webpool classify                                          # synchronise les facettes lieu et usage-commercial
+pnpm webpool pool create --slug nagasaki --file examples/japon/pools/nagasaki.json
+pnpm webpool pool create --slug nagasaki-libre --file examples/japon/pools/nagasaki-libre.json
+pnpm webpool cycle --budget 20
+pnpm webpool domain list --to-qualify
+```
+
+| Variable | Défaut | Rôle |
+| -------- | ------ | ---- |
+| `WEBPOOL_EXPLORE_REST_DAYS` | 30 | jours de repos d'une requête épuisée |
+| `WEBPOOL_EXPLORE_DRY_RUNS` | 2 | passages consécutifs sans URL nouvelle avant épuisement |
+| `WEBPOOL_EXPLORE_SATURATION` | 50 | URLs au-delà desquelles un domaine est écarté des requêtes Brave |
+| `WEBPOOL_EXPLORE_QUERY_MAX_CHARS` | 400 | longueur maximale d'une requête envoyée, suffixe `-site:` compris |
+
+Limites :
+
+- Chaque requête choisie consomme un appel au quota de l'API Brave Search.
+  `--budget` borne ce nombre d'appels par passage.
+- L'opérateur `-site:` n'a été vérifié que sur Brave, où il est respecté même
+  avec 18 exclusions dans une requête de 378 caractères. SearXNG dépend de ses
+  moteurs et ne reçoit donc aucune exclusion. Europeana et Flickr non plus.
+- Les requêtes s'écrivent à la main. Les générer à partir du corpus est prévu
+  dans une phase ultérieure.
 
 ## Déploiement (alwaysdata)
 
@@ -242,23 +365,29 @@ sur erreur, ce qui déclenche le mail d'erreur d'alwaysdata. Exemple de chaîne
 quotidienne :
 
 ```
-30 3 * * *  cd $HOME/www/webpool && NODEJS_VERSION=24 node bin/webpool.js ingest --query "forest lora" --provider brave && NODEJS_VERSION=24 node bin/webpool.js normalize && NODEJS_VERSION=24 node bin/webpool.js classify && NODEJS_VERSION=24 node bin/webpool.js pool refresh --slug lora-foret
+30 3 * * *  cd $HOME/www/webpool && NODEJS_VERSION=24 node bin/webpool.js cycle --budget 20
 ```
+
+`cycle` explore, normalise, classe et rafraîchit tous les pools. Pour une chaîne
+à la main sans exploration, enchaîner `ingest`, `normalize`, `classify` et un
+`pool refresh --slug` par pool.
 
 Les journaux vont dans `~/admin/logs/jobs/`. Une exécution encore en cours fait
 sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
-`WEBPOOL_HOST_DELAY_MS` par hôte). `pool refresh` prend un slug : une commande par
-pool à rafraîchir.
+`WEBPOOL_HOST_DELAY_MS` par hôte).
 
 ## Structure
 
 | Chemin | Rôle |
 |---|---|
-| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) |
-| `src/ingest/` | Providers SERP (`file`, `brave`, `searxng`, `europeana`, `flickr`) + insertion tracée |
+| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) ; `002` à `004` : domain_profile, search_query, search_query_run, exclusion_hash |
+| `src/ingest/` | Providers SERP (`file`, `brave`, `searxng`, `europeana`, `flickr`, `openrouter`) + insertion tracée |
 | `src/normalize/` | Canonisation stricte (tracking, redirections, dédup domaine+canonique), fetch poli |
 | `src/classify/` | Classifieur par règles piloté par `config/taxonomy.json` |
 | `src/migrate.js` | Runner de migrations (`webpool migrate`) |
+| `src/explore/` | Frontière de requêtes, exclusion des domaines saturés, `explore` (fonctions pures dans `frontier.js` et `exclusion.js`) |
+| `src/domains/` | Registre des domaines et facette `usage-commercial` |
+| `src/cycle/` | `cycle` : explore, normalize, classify, refresh des pools |
 | `src/pools/` | Définition JSON → SQL paramétré → matérialisation rangée → export |
 | `bin/webpool.js` | CLI |
 | `scripts/deploy.mjs` | Déploiement alwaysdata (`pnpm deploy:prod`), fonctions pures dans `deploy-lib.mjs` |
@@ -271,7 +400,7 @@ pool à rafraîchir.
 ```bash
 pnpm test               # fonctions pures, aucune base requise
 pnpm db:up
-pnpm test:integration   # couches DB (ingest, normalize, classify, pools)
+pnpm test:integration   # couches DB (ingest, normalize, classify, pools, explore, cycle)
 ```
 
 La suite d'intégration utilise le PostgreSQL docker local dans un schéma jetable créé
