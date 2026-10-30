@@ -192,6 +192,64 @@ d'URL canonique, sans fusion avec l'autre site.
 Google Custom Search n'est pas retenu : l'API est fermée aux nouveaux clients et
 s'arrête le 1er janvier 2027.
 
+## Déploiement (alwaysdata)
+
+webpool est un CLI sans serveur : le déployer, c'est l'installer sur le compte, le
+brancher sur une base PostgreSQL du compte et planifier ses commandes.
+
+**Base.** Dans l'admin, *Bases de données > PostgreSQL* : créer une base en
+PostgreSQL 17 (version du compose et de la CI) et un utilisateur avec l'accès
+complet. Le schéma n'utilise aucune extension. Se connecter sur le port 5432 et non
+sur le pgBouncer (5433) : `migrate` prend un verrou consultatif de session, qu'un
+pooler peut porter sur une autre session que celle qui le relâche.
+
+**Node.** Fixer Node 24 (ou 22) dans *Environnement > Node.js* pour les tâches
+planifiées ; le script de déploiement force `NODEJS_VERSION` (champ `nodeVersion`).
+
+**Préparation, une fois :**
+
+```bash
+# sur la cible : le .env de production, à côté du code (pas dedans : la bascule le purgerait)
+#   ~/www/webpool.env (chmod 600) : DATABASE_URL=postgres://<user>:<mdp>@postgresql-<compte>.alwaysdata.net:5432/<base>
+#                               + clés des providers utilisés
+# en local : la cible (fichier ignoré par git) et une clé SSH dédiée côté WSL
+cp deploy/targets.example.json deploy/targets.json      # host, user, sshKey…
+wsl ssh-keygen -t ed25519 -N "" -C webpool-ad -f ~/.ssh/webpool_ci
+wsl ssh-copy-id -i ~/.ssh/webpool_ci.pub <compte>@ssh-<compte>.alwaysdata.net
+```
+
+**Déployer** depuis Windows (WSL avec `rsync`, `ssh` et pnpm dans `~/.local/bin`) :
+
+```bash
+pnpm deploy:prod ad --check     # archive du commit + install prod en staging WSL, sans contacter la cible
+pnpm deploy:prod ad             # prévisualisation : garde, Node, pg_dump, fichiers modifiés
+pnpm deploy:prod ad --apply     # livraison
+```
+
+Seul le commit `HEAD` de `main` part (`git archive`), jamais la copie de travail.
+`--apply`, sous verrou (`~/deploy/webpool-ad/lock`) et garde de cycle de vie :
+synchronise dans `~/www/webpool.new` (droits 755/644 vérifiés), y pose un `.htaccess`
+`Require all denied`, y lie `.env` vers
+`~/www/webpool.env`, sauvegarde la base (`pg_dump -Fc`, 5 dernières gardées dans
+`~/deploy/webpool-ad/backups/`), lance `migrate` puis `stats`, et bascule
+`~/www/webpool.new` → `~/www/webpool`. La version précédente reste dans `~/www/webpool.old`
+jusqu'au déploiement suivant ; les commandes de restauration sont affichées en fin
+de run. Une étape en échec arrête tout avant la bascule.
+
+**Tâches planifiées** (*Avancé > Tâches planifiées*, syntaxe cron). Le CLI lit
+`.env` à la racine du dépôt quel que soit le répertoire courant, et sort en code 1
+sur erreur, ce qui déclenche le mail d'erreur d'alwaysdata. Exemple de chaîne
+quotidienne :
+
+```
+30 3 * * *  cd $HOME/www/webpool && NODEJS_VERSION=24 node bin/webpool.js ingest --query "forest lora" --provider brave && NODEJS_VERSION=24 node bin/webpool.js normalize && NODEJS_VERSION=24 node bin/webpool.js classify && NODEJS_VERSION=24 node bin/webpool.js pool refresh --slug lora-foret
+```
+
+Les journaux vont dans `~/admin/logs/jobs/`. Une exécution encore en cours fait
+sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
+`WEBPOOL_HOST_DELAY_MS` par hôte). `pool refresh` prend un slug : une commande par
+pool à rafraîchir.
+
 ## Structure
 
 | Chemin | Rôle |
@@ -203,6 +261,8 @@ s'arrête le 1er janvier 2027.
 | `src/migrate.js` | Runner de migrations (`webpool migrate`) |
 | `src/pools/` | Définition JSON → SQL paramétré → matérialisation rangée → export |
 | `bin/webpool.js` | CLI |
+| `scripts/deploy.mjs` | Déploiement alwaysdata (`pnpm deploy:prod`), fonctions pures dans `deploy-lib.mjs` |
+| `deploy/` | Contrat de déploiement, exemple de cible (`targets.json` ignoré par git) |
 | `test/` | Tests unitaires (vitest) des fonctions pures |
 | `test/integration/` | Tests des couches DB (PostgreSQL local) |
 

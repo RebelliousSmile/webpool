@@ -1,0 +1,90 @@
+{
+  "version": 2,
+  "owner": {
+    "plugin": "sc-js",
+    "scope": "root"
+  },
+  "manager": "pnpm",
+  "command": "pnpm run deploy:prod",
+  "workingDirectory": ".",
+  "source": {
+    "repository": ".",
+    "ref": "main",
+    "clean": true,
+    "dirtyPolicy": "not applicable; the script archives the committed HEAD via `git archive`, so uncommitted changes never ship (a dirty workspace only triggers a warning)"
+  },
+  "targets": [
+    {
+      "id": "ad",
+      "phase": "production",
+      "mode": "server",
+      "provider": "alwaysdata",
+      "executionContext": "workspace",
+      "lifecycleRevision": 1,
+      "guard": {
+        "kind": "file",
+        "reference": "~/deploy/webpool-ad/guard.json"
+      },
+      "lock": {
+        "key": "~/deploy/webpool-ad/lock",
+        "behavior": "fail"
+      },
+      "trigger": "manual",
+      "secretNames": ["DATABASE_URL", "BRAVE_API_KEY", "SEARXNG_URL", "EUROPEANA_API_KEY", "FLICKR_API_KEY"],
+      "invocation": {
+        "command": "pnpm run deploy:prod ad --apply",
+        "workingDirectory": ".",
+        "operations": ["deploy:init", "deploy:code", "deploy:schema"]
+      }
+    }
+  ],
+  "operations": [
+    {
+      "name": "deploy:init",
+      "surface": "schema",
+      "authority": "local",
+      "phases": ["production"],
+      "destructive": false,
+      "preconditions": ["explicit target ad", "reachable SSH host with the dedicated WSL key", "guard absent or identical to {targetId: ad, phase: production, lifecycleRevision: 1}"],
+      "proof": ["remote guard file equals target ad, production, lifecycle revision 1 (read and compared before any mutation)"],
+      "recovery": ["remove the non-secret guard file only before any release uses lifecycle revision 1"]
+    },
+    {
+      "name": "deploy:code",
+      "surface": "code",
+      "authority": "local",
+      "phases": ["production"],
+      "destructive": false,
+      "preconditions": [
+        "current branch is main (or --any-branch)",
+        "matching remote lifecycle guard",
+        "exclusive target lock (mkdir-based, fails immediately if held)",
+        "~/www/webpool.env present on the target (target-authoritative, never transferred, outside the swapped ~/www/webpool)",
+        "remote Node satisfies ^22.12.0 || >=24 under NODEJS_VERSION",
+        "git archive of the commit plus `pnpm install --prod --frozen-lockfile` succeed in a native Linux WSL staging directory (not DrvFs)"
+      ],
+      "proof": [
+        "rsync exits 0 into ~/www/webpool.new with --chmod=D755,F644",
+        "find over ~/www/webpool.new reports no directory other than 755 and no file other than 644",
+        "`webpool stats` exits 0 from ~/www/webpool.new before the swap",
+        "after the swap, ~/www/webpool/.env is a symlink to ~/www/webpool.env, ~/www/webpool/.htaccess denies all web access and ~/www/webpool/bin/webpool.js exists"
+      ],
+      "recovery": ["swap ~/www/webpool.old back over ~/www/webpool; ~/www/webpool.old is only purged at the START of the next deploy:code, so it survives until then"],
+      "sync": {
+        "comparison": "content-hash",
+        "deletions": "mirror code only; /.env and /.htaccess are excluded and written by the script",
+        "resumable": true
+      }
+    },
+    {
+      "name": "deploy:schema",
+      "surface": "schema",
+      "authority": "local",
+      "phases": ["production"],
+      "destructive": false,
+      "preconditions": ["deploy:code staged in ~/www/webpool.new", "pg_dump available on the target", "fresh pg_dump -Fc of the database succeeds before migrating"],
+      "proof": ["`webpool migrate` exits 0 (each migration runs in its own transaction with its schema_migration row)", "`webpool stats` exits 0 against the migrated schema"],
+      "recovery": ["pg_restore --clean --if-exists from ~/deploy/webpool-ad/backups/webpool-<stamp>-<commit>.dump; the five most recent dumps are kept"]
+    }
+  ]
+}

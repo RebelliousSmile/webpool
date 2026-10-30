@@ -15,7 +15,8 @@
     "db:reset": "docker compose down -v && docker compose up -d --wait && node bin/webpool.js migrate",
     "webpool": "node bin/webpool.js",
     "test": "vitest run",
-    "test:integration": "vitest run --config vitest.integration.config.js"
+    "test:integration": "vitest run --config vitest.integration.config.js",
+    "deploy:prod": "node scripts/deploy.mjs"
   },
   "engines": {
     "node": "^22.12.0 || >=24"
