@@ -13,8 +13,8 @@ export function mapResponse(data) {
   return (data?.web?.results ?? []).map((r, i) => ({ url: r.url, rank: i + 1, title: r.title ?? null }));
 }
 
-export async function search({ query, limit }, { fetchImpl } = {}) {
-  const key = requireConfig('brave', config.braveApiKey, 'BRAVE_API_KEY');
+export async function search({ query, limit }, { fetchImpl, apiKey = config.braveApiKey } = {}) {
+  const key = requireConfig('brave', apiKey, 'BRAVE_API_KEY');
   const data = await fetchJson('Brave Search', buildUrl(query, limit), {
     headers: { 'X-Subscription-Token': key },
     fetchImpl,

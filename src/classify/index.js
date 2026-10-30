@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { config } from '../config.js';
 import { query, withTransaction } from '../db.js';
-import { startRun, finishRun } from '../run.js';
+import { withRun } from '../run.js';
 import { classifyItem } from './classifier.js';
 
 export function loadTaxonomy(path = config.taxonomyPath) {
@@ -107,10 +107,8 @@ async function persistClassification(item, result, ids, runId) {
 }
 
 // US-05 : classe les url_item en statut 'normalized' (ou reclasse avec --all).
-export async function classifyPending({ limit = 100, reclassify = false } = {}) {
-  const taxonomy = loadTaxonomy();
-  const runId = await startRun('classify', { limit, reclassify });
-  try {
+export async function classifyPending({ limit = 100, reclassify = false, taxonomy = loadTaxonomy() } = {}) {
+  return withRun('classify', { limit, reclassify }, async (runId) => {
     const ids = await syncTaxonomy(taxonomy);
     const statuses = reclassify ? ['normalized', 'classified'] : ['normalized'];
     const fetchBatch = async (afterId) =>
@@ -152,10 +150,6 @@ export async function classifyPending({ limit = 100, reclassify = false } = {}) 
       afterId = items.at(-1).id;
     }
 
-    await finishRun(runId, 'done', { classified, unthemed });
-    return { runId, classified, unthemed };
-  } catch (err) {
-    await finishRun(runId, 'failed', { error: String(err.message ?? err) });
-    throw err;
-  }
+    return { classified, unthemed };
+  });
 }

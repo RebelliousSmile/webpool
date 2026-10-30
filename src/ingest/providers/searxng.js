@@ -17,7 +17,7 @@ export function mapResponse(data, limit = 20) {
     .map((r, i) => ({ url: r.url, rank: i + 1, title: r.title ?? null }));
 }
 
-export async function search({ query, limit }, { fetchImpl } = {}) {
-  const base = requireConfig('searxng', config.searxngUrl, 'SEARXNG_URL');
+export async function search({ query, limit }, { fetchImpl, baseUrl = config.searxngUrl } = {}) {
+  const base = requireConfig('searxng', baseUrl, 'SEARXNG_URL');
   return mapResponse(await fetchJson('SearXNG', buildUrl(base, query), { fetchImpl }), limit);
 }

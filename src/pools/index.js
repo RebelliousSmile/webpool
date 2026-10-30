@@ -1,17 +1,19 @@
 import fs from 'node:fs';
 import { query, withTransaction } from '../db.js';
-import { startRun, finishRun } from '../run.js';
+import { withRun } from '../run.js';
 import { buildPoolQuery } from './criteria.js';
 
-export async function createPool({ slug, label, definitionFile, definition }) {
+// Un slug existant n'est remplacé qu'avec `force` : pas d'écrasement silencieux.
+export async function createPool({ slug, label, definitionFile, definition, force = false }) {
   const def = definition ?? JSON.parse(fs.readFileSync(definitionFile, 'utf8'));
   buildPoolQuery(def); // valide la définition avant insertion
   const { rows } = await query(
     `INSERT INTO pool (slug, label, definition) VALUES ($1, $2, $3)
-     ON CONFLICT (slug) DO UPDATE SET label = EXCLUDED.label, definition = EXCLUDED.definition
+     ON CONFLICT (slug) DO ${force ? 'UPDATE SET label = EXCLUDED.label, definition = EXCLUDED.definition' : 'NOTHING'}
      RETURNING id`,
     [slug, label ?? slug, JSON.stringify(def)],
   );
+  if (rows.length === 0) throw new Error(`Pool existant : ${slug} (utiliser --force pour le remplacer)`);
   return rows[0].id;
 }
 
@@ -22,8 +24,7 @@ export async function refreshPool(slug) {
   if (rows.length === 0) throw new Error(`Pool inconnu : ${slug}`);
   const pool = rows[0];
 
-  const runId = await startRun('pool', { slug });
-  try {
+  return withRun('pool', { slug }, async (runId) => {
     const { text, values } = buildPoolQuery(pool.definition);
     const { rows: selected } = await query(text, values);
 
@@ -41,12 +42,8 @@ export async function refreshPool(slug) {
       );
     });
 
-    await finishRun(runId, 'done', { count: selected.length });
-    return { runId, count: selected.length };
-  } catch (err) {
-    await finishRun(runId, 'failed', { error: String(err.message ?? err) });
-    throw err;
-  }
+    return { count: selected.length };
+  });
 }
 
 export async function listPools() {

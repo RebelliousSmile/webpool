@@ -94,11 +94,17 @@ pnpm webpool classify --all       # reclasse tout le corpus, par lots de --limit
 
 # Pools matérialisés
 pnpm webpool pool create --slug lora-foret --label "LoRA forêt" --file mes-criteres.json
+pnpm webpool pool create --slug lora-foret --file mes-criteres.json --force   # remplace un pool existant
 pnpm webpool pool refresh --slug lora-foret
 pnpm webpool pool show --slug lora-foret
 pnpm webpool pool export --slug lora-foret --format csv --out lora-foret.csv   # json | csv | md, stdout par défaut
 pnpm webpool stats
 ```
+
+Sans `--force`, `pool create` refuse un slug déjà pris et laisse sa définition
+intacte. Chaque critère est typé à la lecture du fichier : un critère inconnu ou mal
+typé (`limit` non entier, `subthemes` qui n'est pas un tableau…) est refusé avec un
+message qui le nomme. Dans l'export Markdown, le HTML des titres est échappé.
 
 Exemple de définition de pool (lisible et réexécutable) :
 

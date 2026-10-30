@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { closePool, query } from '../src/db.js';
+import { closePool } from '../src/db.js';
 import { ingest } from '../src/ingest/index.js';
 import { normalizePending } from '../src/normalize/index.js';
 import { classifyPending } from '../src/classify/index.js';
 import fs from 'node:fs';
 import { createPool, refreshPool, listPools, showPool, loadPoolForExport } from '../src/pools/index.js';
 import { formatPool } from '../src/pools/export.js';
+import { stats } from '../src/stats.js';
 
 const HELP = `webpool — pipeline d'URLs : ingestion, normalisation, classification, pools
 
@@ -14,7 +15,7 @@ Usage :
   webpool ingest --query "…" [--provider file|brave|searxng|europeana|flickr] [--input results.json] [--limit N]
   webpool normalize [--limit N] [--offline]
   webpool classify [--limit N] [--all]     (--all : tout le corpus, par lots de N)
-  webpool pool create --slug <slug> [--label "…"] --file definition.json
+  webpool pool create --slug <slug> [--label "…"] --file definition.json [--force]
   webpool pool refresh --slug <slug>
   webpool pool show --slug <slug>
   webpool pool export --slug <slug> [--format json|csv|md] [--out fichier]
@@ -29,6 +30,7 @@ const OPTIONS = {
   limit: { type: 'string' },
   offline: { type: 'boolean', default: false },
   all: { type: 'boolean', default: false },
+  force: { type: 'boolean', default: false },
   slug: { type: 'string' },
   label: { type: 'string' },
   file: { type: 'string' },
@@ -37,14 +39,12 @@ const OPTIONS = {
   help: { type: 'boolean', short: 'h', default: false },
 };
 
-async function stats() {
-  const { rows: byStatus } = await query(
-    'SELECT status, count(*)::int AS n FROM url_item GROUP BY status ORDER BY status',
-  );
-  const { rows: runs } = await query(
-    `SELECT kind, status, count(*)::int AS n FROM processing_run GROUP BY kind, status ORDER BY kind`,
-  );
-  return { url_item: byStatus, processing_run: runs };
+// Valide avant toute connexion à la base.
+function parseLimit(raw) {
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  if (!/^\d+$/.test(raw.trim()) || n <= 0) throw new Error(`--limit doit être un entier > 0 (reçu : "${raw}")`);
+  return n;
 }
 
 async function main() {
@@ -54,12 +54,11 @@ async function main() {
     allowPositionals: true,
   });
   const [command, subcommand] = positionals;
-  const limit = values.limit ? Number(values.limit) : undefined;
-
   if (values.help || !command) {
     console.log(HELP);
     return;
   }
+  const limit = parseLimit(values.limit);
 
   switch (command) {
     case 'ingest': {
@@ -91,7 +90,7 @@ async function main() {
     case 'pool': {
       if (subcommand === 'create') {
         if (!values.slug || !values.file) throw new Error('pool create : --slug et --file requis');
-        await createPool({ slug: values.slug, label: values.label, definitionFile: values.file });
+        await createPool({ slug: values.slug, label: values.label, definitionFile: values.file, force: values.force });
         const res = await refreshPool(values.slug);
         console.log(`Pool "${values.slug}" créé et matérialisé : ${res.count} URLs.`);
       } else if (subcommand === 'refresh') {
@@ -127,6 +126,8 @@ async function main() {
       break;
     }
     default:
+      console.error(`Commande inconnue : ${command}
+`);
       console.log(HELP);
       process.exitCode = 1;
   }

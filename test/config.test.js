@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import { config } from '../src/config.js';
 import { defaultDatabaseUrl, intEnv } from '../src/env.js';
+
+describe('config', () => {
+  it('est gelée : une modification lève une erreur', () => {
+    expect(Object.isFrozen(config)).toBe(true);
+    expect(() => {
+      config.taxonomyPath = 'ailleurs.json';
+    }).toThrow(TypeError);
+  });
+
+  it('annonce la version de package.json dans le User-Agent', () => {
+    const { version } = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    expect(config.userAgent).toContain(`webpool/${version}`);
+  });
+});
 
 describe('intEnv', () => {
   it('rend le défaut si la variable est absente ou vide', () => {

@@ -47,4 +47,25 @@ describe('buildPoolQuery', () => {
   it('rejette les critères inconnus', () => {
     expect(() => buildPoolQuery({ foo: 1 })).toThrow(/Critère inconnu/);
   });
+
+  it('valide le type de chaque critère en le nommant', () => {
+    expect(() => buildPoolQuery({ limit: 'abc' })).toThrow(/Critère limit invalide/);
+    expect(() => buildPoolQuery({ limit: 2.5 })).toThrow(/Critère limit invalide/);
+    expect(() => buildPoolQuery({ subthemes: 'x' })).toThrow(/Critère subthemes invalide/);
+    expect(() => buildPoolQuery({ theme: 42 })).toThrow(/Critère theme invalide/);
+    expect(() => buildPoolQuery({ facets: ['a'] })).toThrow(/Critère facets invalide/);
+    expect(() => buildPoolQuery({ facets: { type: 1 } })).toThrow(/Critère facets invalide/);
+    expect(() => buildPoolQuery({ min_quality: 1.5 })).toThrow(/Critère min_quality invalide/);
+    expect(() => buildPoolQuery({ min_relevance: '0.3' })).toThrow(/Critère min_relevance invalide/);
+    expect(() => buildPoolQuery({ domains_exclude: [1] })).toThrow(/Critère domains_exclude invalide/);
+  });
+
+  it("rejette une définition qui n'est pas un objet", () => {
+    expect(() => buildPoolQuery([])).toThrow(/objet JSON attendu/);
+    expect(() => buildPoolQuery(null)).toThrow(/objet JSON attendu/);
+  });
+
+  it("n'accepte pas un ordre hérité du prototype", () => {
+    expect(() => buildPoolQuery({ order: 'toString' })).toThrow(/Ordre inconnu/);
+  });
 });

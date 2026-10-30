@@ -1,9 +1,13 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { defaultDatabaseUrl, intEnv, loadDotEnv, rootDir } from './env.js';
 
 loadDotEnv();
 
-export const config = {
+const { version } = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
+
+// Gelée : les réglages se passent en paramètre (tests compris), jamais par mutation.
+export const config = Object.freeze({
   rootDir,
   databaseUrl: process.env.DATABASE_URL ?? defaultDatabaseUrl(),
   braveApiKey: process.env.BRAVE_API_KEY ?? '',
@@ -20,5 +24,5 @@ export const config = {
   maxRedirects: intEnv('WEBPOOL_MAX_REDIRECTS', 5, 0),
   // intranet assumé : désactive la garde d'hôte de la normalisation
   allowPrivateHosts: ['1', 'true'].includes(process.env.WEBPOOL_ALLOW_PRIVATE_HOSTS ?? ''),
-  userAgent: 'webpool/0.1 (+https://github.com/RebelliousSmile/webpool)',
-};
+  userAgent: `webpool/${version} (+https://github.com/RebelliousSmile/webpool)`,
+});

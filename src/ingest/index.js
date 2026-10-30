@@ -1,5 +1,5 @@
-import { query, withTransaction } from '../db.js';
-import { startRun, finishRun } from '../run.js';
+import { withTransaction } from '../db.js';
+import { withRun } from '../run.js';
 import * as fileProvider from './providers/file.js';
 import * as braveProvider from './providers/brave.js';
 import * as searxngProvider from './providers/searxng.js';
@@ -23,8 +23,7 @@ export async function ingest({ provider, searchQuery, input, limit }) {
   }
   if (!searchQuery) throw new Error('Option --query requise');
 
-  const runId = await startRun('ingest', { provider, query: searchQuery });
-  try {
+  return withRun('ingest', { provider, query: searchQuery }, async (runId) => {
     const results = await impl.search({ query: searchQuery, input, limit });
     let inserted = 0;
     let existing = 0;
@@ -59,15 +58,6 @@ export async function ingest({ provider, searchQuery, input, limit }) {
       });
     }
 
-    await finishRun(runId, 'done', { inserted, existing, total: results.length });
-    return { runId, inserted, existing, total: results.length };
-  } catch (err) {
-    await finishRun(runId, 'failed', { error: String(err.message ?? err) });
-    throw err;
-  }
-}
-
-export async function pendingCount() {
-  const { rows } = await query("SELECT count(*)::int AS n FROM url_item WHERE status = 'pending'");
-  return rows[0].n;
+    return { inserted, existing, total: results.length };
+  });
 }

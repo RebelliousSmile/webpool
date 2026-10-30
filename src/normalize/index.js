@@ -1,6 +1,6 @@
 import { config } from '../config.js';
 import { query, withTransaction } from '../db.js';
-import { startRun, finishRun } from '../run.js';
+import { withRun } from '../run.js';
 import { createFetcher, mapLimit, HttpError } from './fetcher.js';
 import { canonicalizeUrl, domainOf, extractCanonicalLink, extractTitle } from './normalizer.js';
 
@@ -87,9 +87,8 @@ export async function normalizePending({
     fetchImpl ? { fetchImpl, lookup: fakePublicLookup, perHostDelayMs: 0, backoffMs: 0 } : {},
   ),
 } = {}) {
-  const runId = await startRun('normalize', { limit, offline, concurrency });
-  const counts = { normalized: 0, duplicate: 0, error: 0 };
-  try {
+  return withRun('normalize', { limit, offline, concurrency }, async (runId) => {
+    const counts = { normalized: 0, duplicate: 0, error: 0 };
     const { rows: items } = await query(
       "SELECT id, raw_url, title FROM url_item WHERE status = 'pending' ORDER BY id LIMIT $1",
       [limit],
@@ -111,10 +110,6 @@ export async function normalizePending({
         );
       }
     }
-    await finishRun(runId, 'done', counts);
-    return { runId, ...counts, total: items.length };
-  } catch (err) {
-    await finishRun(runId, 'failed', { error: String(err.message ?? err) });
-    throw err;
-  }
+    return { ...counts, total: items.length };
+  });
 }

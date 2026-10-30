@@ -16,7 +16,6 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
   let normalizePending;
   let classifyPending;
   let pools;
-  let config;
   const { query } = { query: (...a) => db.query(...a) };
 
   beforeAll(async () => {
@@ -26,7 +25,6 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
     ({ normalizePending } = await import('../../src/normalize/index.js'));
     ({ classifyPending } = await import('../../src/classify/index.js'));
     pools = await import('../../src/pools/index.js');
-    ({ config } = await import('../../src/config.js'));
   });
 
   afterAll(async () => {
@@ -188,9 +186,12 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
       facets: [{ slug: 'type', label: 'Type', values: [{ value: 'article', patterns: [] }] }],
       ...over,
     });
+    // La taxonomie est injectée : config est gelée, aucun test ne la modifie.
+    let taxonomy;
     const useTaxonomy = (t) => {
-      config.taxonomyPath = writeTempJson('taxonomy.json', t);
+      taxonomy = t;
     };
+    const classify = (opts = {}) => classifyPending({ taxonomy, ...opts });
     const prepare = async () => {
       await ingestUrls(['https://example.com/lora-training', 'https://unsplash.com/forest']);
       await normalizePending({ offline: true });
@@ -199,7 +200,7 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
     it('synchronise la taxonomie en base et classe', async () => {
       useTaxonomy(tax());
       await prepare();
-      const res = await classifyPending();
+      const res = await classify();
       expect(res).toMatchObject({ classified: 2, unthemed: 0 });
       const { rows } = await query(
         `SELECT ui.domain, t.slug, ut.is_primary FROM url_theme ut
@@ -216,7 +217,7 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
     it('resynchronise thèmes et facettes quand la taxonomie change, sans doublon', async () => {
       useTaxonomy(tax());
       await prepare();
-      await classifyPending();
+      await classify();
 
       useTaxonomy(
         tax({
@@ -227,7 +228,7 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
           ],
         }),
       );
-      await classifyPending({ reclassify: true });
+      await classify({ reclassify: true });
 
       const { rows: themes } = await query(
         `SELECT t.slug, t.label, p.slug AS parent FROM theme t LEFT JOIN theme p ON p.id = t.parent_id ORDER BY t.slug`,
@@ -246,8 +247,8 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
     it("ne reclasse pas sans --all", async () => {
       useTaxonomy(tax());
       await prepare();
-      await classifyPending();
-      const again = await classifyPending();
+      await classify();
+      const again = await classify();
       expect(again.classified).toBe(0);
     });
 
@@ -255,8 +256,8 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
       useTaxonomy(tax());
       await ingestUrls(['https://a.com/lora', 'https://b.com/lora', 'https://c.com/x', 'https://d.com/x', 'https://e.com/x']);
       await normalizePending({ offline: true });
-      await classifyPending();
-      const res = await classifyPending({ reclassify: true, limit: 2 });
+      await classify();
+      const res = await classify({ reclassify: true, limit: 2 });
       expect(res.classified).toBe(5);
       const { rows } = await query(`SELECT detail FROM processing_run WHERE kind = 'classify' ORDER BY id DESC LIMIT 1`);
       expect(rows[0].detail).toMatchObject({ classified: 5 });
@@ -266,9 +267,9 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
     it('supprime un thème et une facette retirés du JSON, avec leurs affectations', async () => {
       useTaxonomy(tax());
       await prepare();
-      await classifyPending();
+      await classify();
       useTaxonomy(tax({ themes: [{ slug: 'photo', label: 'Photo', keywords: ['unsplash'], children: [] }], facets: [] }));
-      await classifyPending({ reclassify: true });
+      await classify({ reclassify: true });
       const { rows } = await query('SELECT slug FROM theme ORDER BY slug');
       expect(rows).toEqual([{ slug: 'photo' }]);
       expect(await count('url_theme')).toBe(1);
@@ -286,7 +287,7 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
         }),
       );
       await prepare();
-      await expect(classifyPending()).rejects.toThrow(/slug de thème en double « photo »/);
+      await expect(classify()).rejects.toThrow(/slug de thème en double « photo »/);
       expect(await count('theme')).toBe(0);
       expect(await count('facet_definition')).toBe(0);
       const { rows } = await query(`SELECT status FROM processing_run WHERE kind = 'classify'`);
@@ -296,10 +297,6 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
 
   describe('pools', () => {
     const setup = async () => {
-      config.taxonomyPath = writeTempJson('taxonomy.json', {
-        themes: [{ slug: 'ia', label: 'IA', keywords: ['lora'], children: [] }],
-        facets: [],
-      });
       await ingestUrls([
         'https://a.com/lora-1',
         'https://b.com/lora-2',
@@ -307,7 +304,9 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
         'https://d.com/rien',
       ]);
       await normalizePending({ offline: true });
-      await classifyPending();
+      await classifyPending({
+        taxonomy: { themes: [{ slug: 'ia', label: 'IA', keywords: ['lora'], children: [] }], facets: [] },
+      });
       // qualité distincte et déterministe pour fixer le rang
       await query(`UPDATE url_item SET quality_score = CASE domain
           WHEN 'a.com' THEN 0.2 WHEN 'b.com' THEN 0.9 WHEN 'c.com' THEN 0.5 ELSE 0.1 END,
@@ -340,11 +339,22 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
       expect(after[0].refreshed_at.getTime()).toBeGreaterThanOrEqual(before[0].refreshed_at.getTime());
     });
 
-    it('une définition modifiée (createPool sur un slug existant) change la sélection au refresh', async () => {
+    it('createPool sur un slug existant échoue sans --force et laisse la définition intacte', async () => {
+      await setup();
+      await pools.createPool({ slug: 'p', definition: def });
+      await expect(pools.createPool({ slug: 'p', definition: { ...def, limit: 1 } })).rejects.toThrow(
+        /Pool existant : p/,
+      );
+      const { rows } = await query('SELECT definition FROM pool WHERE slug = $1', ['p']);
+      expect(rows[0].definition).toEqual(def);
+      expect((await pools.refreshPool('p')).count).toBe(3);
+    });
+
+    it('une définition modifiée (createPool --force sur un slug existant) change la sélection au refresh', async () => {
       await setup();
       await pools.createPool({ slug: 'p', definition: def });
       await pools.refreshPool('p');
-      await pools.createPool({ slug: 'p', definition: { ...def, limit: 1 } });
+      await pools.createPool({ slug: 'p', definition: { ...def, limit: 1 }, force: true });
       expect((await pools.refreshPool('p')).count).toBe(1);
       expect(await count('pool_item')).toBe(1);
       expect(await count('pool')).toBe(1);
