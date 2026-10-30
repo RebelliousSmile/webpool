@@ -10,22 +10,35 @@
 //   "min_quality": 0.5,
 //   "domains_exclude": ["pinterest.com"],
 //   "domains_include": [],               // si non vide : liste blanche
-//   "order": "quality",                  // quality | relevance | recent | composite
+//   "order": "quality",                  // quality | relevance | recent | composite | rarity
 //   "limit": 50
 // }
+
+// Rareté : 1 / sqrt(URLs vivantes du domaine) ; une URL d'un domaine unique vaut 1.
+const RARITY = '1 / sqrt(coalesce(dc.urls, 1))';
 
 const ORDERS = {
   quality: 'ui.quality_score DESC NULLS LAST',
   relevance: 'ui.relevance_score DESC NULLS LAST',
   recent: 'ui.first_seen_at DESC',
   composite: '(coalesce(ui.relevance_score, 0) + coalesce(ui.quality_score, 0)) / 2 DESC',
+  rarity: `${RARITY} DESC, ui.quality_score DESC NULLS LAST`,
 };
 
 const SCORE_EXPR = {
   quality: 'coalesce(ui.quality_score, 0)',
   relevance: 'coalesce(ui.relevance_score, 0)',
-  recent: '0',
+  // décroît avec l'âge en jours, sans changer l'ordre first_seen_at DESC
+  recent: '1 / (1 + extract(epoch FROM now() - ui.first_seen_at) / 86400)',
   composite: '(coalesce(ui.relevance_score, 0) + coalesce(ui.quality_score, 0)) / 2',
+  rarity: RARITY,
+};
+
+// Jointure ajoutée pour les seuls ordres qui en ont besoin.
+const JOINS = {
+  rarity:
+    `  LEFT JOIN (SELECT domain, count(*) AS urls FROM url_item\n` +
+    `              WHERE status <> 'duplicate' AND domain IS NOT NULL GROUP BY domain) dc ON dc.domain = ui.domain\n`,
 };
 
 const KNOWN_KEYS = new Set([
@@ -114,6 +127,7 @@ export function buildPoolQuery(definition) {
   const text =
     `SELECT ui.id, ui.canonical_url, ui.domain, ${SCORE_EXPR[order]} AS pool_score\n` +
     `  FROM url_item ui\n` +
+    (JOINS[order] ?? '') +
     ` WHERE ${where.join('\n   AND ')}\n` +
     ` ORDER BY ${ORDERS[order]}, ui.id\n` +
     ` LIMIT ${add(limit)}`;

@@ -426,6 +426,42 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
       expect(out.items.map((i) => i.domain)).toEqual(['b.com', 'c.com', 'a.com']);
     });
 
+    it('rarity : un domaine à 1 URL précède un domaine massif, ordre stable d’un refresh à l’autre', async () => {
+      const massive = Array.from({ length: 10 }, (_, i) => `https://big.com/lora-${i}`);
+      await ingestUrls([...massive, 'https://rare.com/lora', 'https://mid.com/lora-1', 'https://mid.com/lora-2']);
+      await normalizePending({ offline: true });
+      await classifyPending({
+        taxonomy: { themes: [{ slug: 'ia', label: 'IA', keywords: ['lora'], children: [] }], facets: [] },
+      });
+      // big.com a la meilleure qualité : seule la rareté le fait reculer
+      await query(`UPDATE url_item SET quality_score = CASE domain WHEN 'big.com' THEN 0.9 ELSE 0.1 END`);
+      await pools.createPool({ slug: 'r', definition: { theme: 'ia', order: 'rarity', limit: 20 } });
+
+      await pools.refreshPool('r');
+      const first = await pools.showPool('r');
+      expect(first.map((r) => r.domain).slice(0, 3)).toEqual(['rare.com', 'mid.com', 'mid.com']);
+      expect(first.slice(3).every((r) => r.domain === 'big.com')).toBe(true);
+      expect(Number(first[0].score)).toBe(1);
+      expect(Number(first[3].score)).toBeCloseTo(1 / Math.sqrt(10), 3);
+
+      await pools.refreshPool('r');
+      expect((await pools.showPool('r')).map((r) => r.canonical_url)).toEqual(first.map((r) => r.canonical_url));
+    });
+
+    it('recent : ordre par découverte inchangé, score décroissant avec l’âge', async () => {
+      await setup();
+      await query(`UPDATE url_item SET first_seen_at = now() - (CASE domain
+          WHEN 'a.com' THEN 0 WHEN 'b.com' THEN 2 ELSE 9 END) * interval '1 day'`);
+      await pools.createPool({ slug: 'n', definition: { theme: 'ia', order: 'recent' } });
+      await pools.refreshPool('n');
+      const rows = await pools.showPool('n');
+      expect(rows.map((r) => r.domain)).toEqual(['a.com', 'b.com', 'c.com']);
+      const scores = rows.map((r) => Number(r.score));
+      expect(scores[0]).toBeCloseTo(1, 3);
+      expect(scores[1]).toBeCloseTo(1 / 3, 3);
+      expect(scores[2]).toBeCloseTo(1 / 10, 3);
+    });
+
     it('refuse une facette absente de la base, à la création comme au refresh', async () => {
       await setup();
       await expect(pools.createPool({ slug: 'p', definition: { facets: { licence: 'libre' } } })).rejects.toThrow(

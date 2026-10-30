@@ -120,6 +120,19 @@ Exemple de définition de pool (lisible et réexécutable) :
 }
 ```
 
+Ordres (`order`) et score affiché par `pool show` :
+
+| Ordre | Rang | Score |
+| ----- | ---- | ----- |
+| `composite` (défaut) | moyenne pertinence et qualité, décroissante | cette moyenne |
+| `quality` | qualité décroissante | la qualité |
+| `relevance` | pertinence décroissante | la pertinence |
+| `recent` | découverte la plus récente d'abord | `1 / (1 + jours depuis la découverte)` |
+| `rarity` | domaines les moins représentés d'abord, puis qualité | `1 / sqrt(URLs du domaine)`, doublons exclus : 1 pour un domaine à une seule URL |
+
+À rang égal, l'id de l'URL départage : deux `pool refresh` sur le même corpus donnent
+le même ordre.
+
 ### Schéma et migrations
 
 Le schéma vit dans `db/migrations/NNN_description.sql`. `webpool migrate` applique
