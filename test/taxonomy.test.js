@@ -32,6 +32,12 @@ describe('taxonomie réelle — détections attendues', () => {
     expect(classify({ url: 'https://app.example.com/' }).facets['content-type']).toBe('outil');
   });
 
+  it('lieu : Gotō l’emporte sur Nagasaki, la requête ne décide pas', () => {
+    expect(classify({ url: 'https://en.photo-ac.com/photo/1', title: 'Nagasaki / Goto Islands Fukue Island' }).facets.lieu).toBe('goto');
+    expect(classify({ title: 'Kyoto temple', queries: ['Tokyo photos'] }).facets.lieu).toBe('kyoto');
+    expect(classify({ title: 'Goat Island', queries: ['Goto Islands photos'] }).facets.lieu).toBe('autre');
+  });
+
   it('unsplash.com : photographie, licence libre', () => {
     const res = classify({ url: 'https://unsplash.com/photos/forest' });
     expect(res.primary).toBe('photographie');

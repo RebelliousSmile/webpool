@@ -58,9 +58,20 @@
       "slug": "licence",
       "label": "Licence présumée",
       "values": [
-        { "value": "libre", "patterns": ["creative commons", "public domain", "domaine public", "cc0", "unsplash", "pexels", "pixabay", "openverse"] },
-        { "value": "commerciale", "patterns": ["shutterstock", "gettyimages", "istockphoto", "adobe stock"] },
+        { "value": "libre", "patterns": ["creative commons", "public domain", "domaine public", "cc0", "unsplash", "pexels", "pixabay", "openverse", "commons.wikimedia.org", "photo-ac.com"] },
+        { "value": "commerciale", "patterns": ["shutterstock", "gettyimages", "istockphoto", "adobe stock", "stock.adobe.com", "pixtastock", "alamy", "dreamstime", "depositphotos"] },
         { "value": "inconnue", "patterns": [] }
+      ]
+    },
+    {
+      "slug": "lieu",
+      "label": "Lieu",
+      "values": [
+        { "value": "goto", "patterns": ["goto", "gotō", "五島", "fukue"] },
+        { "value": "nagasaki", "patterns": ["nagasaki", "長崎"] },
+        { "value": "kyoto", "patterns": ["kyoto", "kyōto", "京都"] },
+        { "value": "tokyo", "patterns": ["tokyo", "tōkyō", "東京"] },
+        { "value": "autre", "patterns": [] }
       ]
     }
   ],
