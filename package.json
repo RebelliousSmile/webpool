@@ -10,9 +10,9 @@
     "webpool": "bin/webpool.js"
   },
   "scripts": {
-    "db:up": "docker compose up -d",
+    "db:up": "docker compose up -d --wait && node bin/webpool.js migrate",
     "db:down": "docker compose down",
-    "db:reset": "docker compose down -v && docker compose up -d",
+    "db:reset": "docker compose down -v && docker compose up -d --wait && node bin/webpool.js migrate",
     "webpool": "node bin/webpool.js",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.js"

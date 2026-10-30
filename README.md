@@ -76,7 +76,7 @@ rank,url,domain,title,score
 
 ```bash
 pnpm install
-pnpm db:up                  # PostgreSQL 17 via docker compose (schéma auto-appliqué)
+pnpm db:up                  # PostgreSQL 17 via docker compose, puis webpool migrate
 cp .env.example .env        # optionnel : défauts corrects pour le compose local
 
 # Ingestion depuis un export JSON (offline) ou un provider SERP (clés dans .env, voir .env.example)
@@ -99,6 +99,7 @@ pnpm webpool pool refresh --slug lora-foret
 pnpm webpool pool show --slug lora-foret
 pnpm webpool pool export --slug lora-foret --format csv --out lora-foret.csv   # json | csv | md, stdout par défaut
 pnpm webpool stats
+pnpm webpool migrate              # applique les migrations manquantes (pnpm db:up le fait)
 ```
 
 Sans `--force`, `pool create` refuse un slug déjà pris et laisse sa définition
@@ -118,6 +119,20 @@ Exemple de définition de pool (lisible et réexécutable) :
   "limit": 50
 }
 ```
+
+### Schéma et migrations
+
+Le schéma vit dans `db/migrations/NNN_description.sql`. `webpool migrate` applique
+dans l'ordre les fichiers absents de la table `schema_migration`, chacun dans sa
+transaction avec l'enregistrement de sa version : une migration en erreur n'est ni
+appliquée ni enregistrée, et le message nomme le fichier. Un verrou consultatif
+empêche deux `migrate` concurrents de se chevaucher. Une base créée avant les
+migrations (tables présentes, pas de `schema_migration`) enregistre `001` comme
+baseline sans la rejouer et garde son corpus.
+
+Règle : une migration par changement de schéma, et jamais de modification d'une
+migration publiée (une base l'a peut-être déjà appliquée) ; une correction est une
+nouvelle migration.
 
 ### Taxonomie
 
@@ -181,10 +196,11 @@ s'arrête le 1er janvier 2027.
 
 | Chemin | Rôle |
 |---|---|
-| `db/init/001_init.sql` | Schéma PostgreSQL (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) |
+| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) |
 | `src/ingest/` | Providers SERP (`file`, `brave`, `searxng`, `europeana`, `flickr`) + insertion tracée |
 | `src/normalize/` | Canonisation stricte (tracking, redirections, dédup domaine+canonique), fetch poli |
 | `src/classify/` | Classifieur par règles piloté par `config/taxonomy.json` |
+| `src/migrate.js` | Runner de migrations (`webpool migrate`) |
 | `src/pools/` | Définition JSON → SQL paramétré → matérialisation rangée → export |
 | `bin/webpool.js` | CLI |
 | `test/` | Tests unitaires (vitest) des fonctions pures |

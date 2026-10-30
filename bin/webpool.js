@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { closePool } from '../src/db.js';
+import { closePool, getPool } from '../src/db.js';
+import { migrate } from '../src/migrate.js';
 import { ingest } from '../src/ingest/index.js';
 import { normalizePending } from '../src/normalize/index.js';
 import { classifyPending } from '../src/classify/index.js';
@@ -21,6 +22,7 @@ Usage :
   webpool pool export --slug <slug> [--format json|csv|md] [--out fichier]
   webpool pool list
   webpool stats
+  webpool migrate                         (applique les migrations db/migrations manquantes)
 `;
 
 const OPTIONS = {
@@ -117,6 +119,21 @@ async function main() {
         if (pools.length === 0) console.log('(aucun pool)');
       } else {
         throw new Error(`Sous-commande pool inconnue : ${subcommand ?? '(aucune)'}`);
+      }
+      break;
+    }
+    case 'migrate': {
+      const client = await getPool().connect();
+      try {
+        const res = await migrate({ client });
+        if (res.baseline) console.log('Base existante : 001 enregistrée comme baseline.');
+        console.log(
+          res.applied.length
+            ? `Migrations appliquées : ${res.applied.join(', ')}.`
+            : 'Schéma à jour : aucune migration à appliquer.',
+        );
+      } finally {
+        client.release();
       }
       break;
     }

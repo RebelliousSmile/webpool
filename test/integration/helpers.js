@@ -5,6 +5,7 @@ import pg from 'pg';
 // Jamais src/config.js ici : ce module est importé par setup.js avant que DATABASE_URL
 // ne pointe sur le schéma jetable, et figerait config.databaseUrl sur le schéma réel.
 import { defaultDatabaseUrl, loadDotEnv } from '../../src/env.js';
+import { migrate } from '../../src/migrate.js';
 
 loadDotEnv();
 // URL d'origine, mémorisée avant que setup.js ne redirige DATABASE_URL vers le schéma jetable.
@@ -44,12 +45,21 @@ export async function dbAvailable() {
   }
 }
 
-export async function createSchema() {
-  const sql = fs.readFileSync(new URL('../../db/init/001_init.sql', import.meta.url), 'utf8');
+// Schéma jetable migré par le runner, comme une base réelle. `migrate: false`
+// le laisse vide (tests du runner lui-même).
+export async function createSchema({ migrate: runMigrations = true } = {}) {
   await withAdminClient(async (c) => {
     await c.query(`CREATE SCHEMA ${SCHEMA}`);
     await c.query(`SET search_path TO ${SCHEMA}`);
-    await c.query(sql);
+    if (runMigrations) await migrate({ client: c });
+  });
+}
+
+// Client admin dont le search_path vise le schéma jetable.
+export async function withSchemaClient(fn) {
+  return withAdminClient(async (c) => {
+    await c.query(`SET search_path TO ${SCHEMA}`);
+    return fn(c);
   });
 }
 

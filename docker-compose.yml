@@ -12,8 +12,8 @@ services:
     ports:
       - "127.0.0.1:${WEBPOOL_DB_PORT:-5432}:5432"
       - "[::1]:${WEBPOOL_DB_PORT:-5432}:5432"
+    # schéma appliqué par `webpool migrate` (pnpm db:up), plus par l'entrypoint
     volumes:
-      - ./db/init:/docker-entrypoint-initdb.d:ro
       - webpool_pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U webpool -d webpool"]
