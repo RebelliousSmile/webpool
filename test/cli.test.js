@@ -48,6 +48,12 @@ describe('CLI', () => {
     expect(stderr).toContain('--usage invalide : "gratuit" (attendu : libre, sous-conditions, payant, non-commercial)');
   });
 
+  it('domain exclude exige --domain avant toute connexion', async () => {
+    const { code, stderr } = await cli('domain', 'exclude');
+    expect(code).toBe(1);
+    expect(stderr).toContain('domain exclude : --domain requis');
+  });
+
   it('refuse une sous-commande query inconnue avec le code 1', async () => {
     const { code, stderr } = await cli('query', 'frobnicate');
     expect(code).toBe(1);

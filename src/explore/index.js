@@ -4,6 +4,7 @@ import { query } from '../db.js';
 import { withRun } from '../run.js';
 import { ingest, providers } from '../ingest/index.js';
 import { isRested, nextState, priority, selectQueries } from './frontier.js';
+import { applyExclusion, saturatedDomains } from './exclusion.js';
 
 export const QUERY_STATUSES = ['active', 'exhausted', 'paused'];
 
@@ -69,7 +70,7 @@ export async function importQueries(file) {
 async function loadQueries({ status, provider } = {}) {
   const { rows } = await query(
     `SELECT sq.id, sq.provider, sq.query, sq.tags, sq.status, sq.next_page, sq.dry_runs,
-            sq.last_run_at, sq.exhausted_at,
+            sq.last_run_at, sq.exhausted_at, sq.exclusion_hash,
             count(r.id) FILTER (WHERE r.error IS NULL)::int AS runs,
             coalesce(sum(r.new_domains), 0)::int AS new_domains
        FROM search_query sq
@@ -89,6 +90,7 @@ async function loadQueries({ status, provider } = {}) {
     dryRuns: r.dry_runs,
     lastRunAt: r.last_run_at,
     exhaustedAt: r.exhausted_at,
+    exclusionHash: r.exclusion_hash,
     runs: r.runs,
     newDomains: r.new_domains,
   }));
@@ -115,6 +117,21 @@ async function wakeRested({ provider, now, restDays }) {
   return rested.length;
 }
 
+// Seul Brave reçoit l'exclusion : l'opérateur -site: y a été vérifié ; searxng
+// dépend de ses moteurs.
+const EXCLUDING_PROVIDERS = new Set(['brave']);
+
+// Même compte que `domain list` : URLs normalisées ou classées.
+async function loadSaturated(threshold) {
+  const { rows } = await query(
+    `SELECT dp.domain, dp.explore_excluded AS excluded, count(ui.id)::int AS urls
+       FROM domain_profile dp
+       LEFT JOIN url_item ui ON ui.domain = dp.domain AND ui.status IN ('normalized', 'classified')
+      GROUP BY dp.domain`,
+  );
+  return saturatedDomains(rows, threshold);
+}
+
 // Pour le provider file, la requête est le chemin de l'export ; `{page}` y
 // désigne la page demandée.
 function inputFor(q, page) {
@@ -129,6 +146,8 @@ export async function explore({
   limit = 20,
   restDays = config.exploreRestDays,
   dryRunsLimit = config.exploreDryRuns,
+  saturation = config.exploreSaturation,
+  maxChars = config.exploreQueryMaxChars,
   delayMs = 1000,
   sleep = sleepMs,
   now = () => new Date(),
@@ -139,16 +158,36 @@ export async function explore({
   return withRun('explore', { budget, provider: provider ?? null }, async (runId) => {
     const woken = await wakeRested({ provider, now: now(), restDays });
     const chosen = selectQueries(await loadQueries({ status: 'active', provider }), budget);
+    const saturated = chosen.some((q) => EXCLUDING_PROVIDERS.has(q.provider)) ? await loadSaturated(saturation) : [];
     const queries = [];
     let braveCalled = false;
 
     for (const q of chosen) {
-      const page = q.nextPage;
+      let page = q.nextPage;
+      let dryRuns = q.dryRuns;
+      let sentQuery;
+      let excluded = 0;
+      if (EXCLUDING_PROVIDERS.has(q.provider)) {
+        const exclusion = applyExclusion(q.query, saturated, maxChars);
+        excluded = exclusion.excluded.length;
+        if (excluded) sentQuery = exclusion.query;
+        // Autre ensemble exclu : les pages changent de contenu, la pagination repart de 0.
+        if (exclusion.hash !== q.exclusionHash) {
+          page = 0;
+          dryRuns = 0;
+          await query('UPDATE search_query SET exclusion_hash = $2, next_page = 0, dry_runs = 0 WHERE id = $1', [
+            q.id,
+            exclusion.hash,
+          ]);
+        }
+      }
       if (q.provider === 'brave' && braveCalled) await sleep(delayMs);
       if (q.provider === 'brave') braveCalled = true;
       try {
-        const res = await ingest({ provider: q.provider, searchQuery: q.query, input: inputFor(q, page), limit, page });
-        const state = nextState({ provider: q.provider, page, newUrls: res.inserted, dryRuns: q.dryRuns, dryRunsLimit });
+        const res = await ingest({
+          provider: q.provider, searchQuery: q.query, sentQuery, input: inputFor(q, page), limit, page,
+        });
+        const state = nextState({ provider: q.provider, page, newUrls: res.inserted, dryRuns, dryRunsLimit });
         await query(
           `INSERT INTO search_query_run (search_query_id, page, results, new_urls, new_domains, run_id)
            VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -163,7 +202,7 @@ export async function explore({
           [q.id, state.exhausted ? 0 : state.nextPage, state.dryRuns, state.exhausted],
         );
         queries.push({
-          id: q.id, provider: q.provider, query: q.query, page,
+          id: q.id, provider: q.provider, query: q.query, page, excluded,
           results: res.total, newUrls: res.inserted, newDomains: res.newDomains,
           exhausted: state.exhausted, error: null,
         });
@@ -175,7 +214,7 @@ export async function explore({
         );
         await query('UPDATE search_query SET last_run_at = now() WHERE id = $1', [q.id]);
         queries.push({
-          id: q.id, provider: q.provider, query: q.query, page,
+          id: q.id, provider: q.provider, query: q.query, page, excluded,
           results: 0, newUrls: 0, newDomains: 0, exhausted: false, error,
         });
       }

@@ -85,3 +85,21 @@ export async function qualifyDomain({ domain, usage, note }) {
     return { domain: name, usage, rewritten: rewritten.rowCount };
   });
 }
+
+// Exclusion manuelle de l'exploration : un domaine encore jamais vu peut être
+// exclu d'avance ; réintégrer un domaine inconnu est une erreur.
+export async function setExploreExcluded({ domain, excluded }) {
+  const name = normalizeDomain(domain);
+  if (!name) throw new Error('--domain requis');
+  if (excluded) {
+    await query(
+      `INSERT INTO domain_profile (domain, explore_excluded) VALUES ($1, true)
+       ON CONFLICT (domain) DO UPDATE SET explore_excluded = true`,
+      [name],
+    );
+  } else {
+    const { rowCount } = await query('UPDATE domain_profile SET explore_excluded = false WHERE domain = $1', [name]);
+    if (rowCount === 0) throw new Error(`Domaine inconnu du registre : ${name}`);
+  }
+  return { domain: name, excluded };
+}

@@ -26,6 +26,9 @@ export const config = Object.freeze({
   // exploration : repos d'une requête épuisée, passages sans URL nouvelle avant épuisement
   exploreRestDays: intEnv('WEBPOOL_EXPLORE_REST_DAYS', 30, 0),
   exploreDryRuns: intEnv('WEBPOOL_EXPLORE_DRY_RUNS', 2, 1),
+  // exclusion : URLs au-delà desquelles un domaine est saturé, longueur maximale de la requête envoyée
+  exploreSaturation: intEnv('WEBPOOL_EXPLORE_SATURATION', 50, 1),
+  exploreQueryMaxChars: intEnv('WEBPOOL_EXPLORE_QUERY_MAX_CHARS', 400, 1),
   // intranet assumé : désactive la garde d'hôte de la normalisation
   allowPrivateHosts: ['1', 'true'].includes(process.env.WEBPOOL_ALLOW_PRIVATE_HOSTS ?? ''),
   userAgent: `webpool/${version} (+https://github.com/RebelliousSmile/webpool)`,

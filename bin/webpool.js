@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import { createPool, refreshPool, listPools, showPool, loadPoolForExport } from '../src/pools/index.js';
 import { formatPool } from '../src/pools/export.js';
 import { stats } from '../src/stats.js';
-import { assertUsage, listDomains, qualifyDomain } from '../src/domains/index.js';
+import { assertUsage, listDomains, qualifyDomain, setExploreExcluded } from '../src/domains/index.js';
 import { addQuery, explore, importQueries, listQueries, parseTags } from '../src/explore/index.js';
 
 const HELP = `webpool — pipeline d'URLs : ingestion, normalisation, classification, pools
@@ -25,6 +25,8 @@ Usage :
   webpool pool list
   webpool domain list [--to-qualify] [--limit N]
   webpool domain set --domain <domaine> --usage libre|sous-conditions|payant|non-commercial [--note "…"]
+  webpool domain exclude --domain <domaine>   (écarté des requêtes Brave par -site:, en plus des domaines saturés)
+  webpool domain include --domain <domaine>
   webpool query add --provider <p> --query "…" [--tags a,b]
   webpool query import --file requetes.json      (liste de {provider, query, tags})
   webpool query list [--status active|exhausted|paused]
@@ -143,7 +145,7 @@ async function main() {
         for (const d of rows) {
           const seen = d.first_seen_at.toISOString().slice(0, 10);
           console.log(
-            `${String(d.urls).padStart(5)}  ${(d.usage_commercial ?? 'à qualifier').padEnd(15)}  ${d.domain}  (vu le ${seen}${d.first_query ? ` par « ${d.first_query} »` : ''})`,
+            `${String(d.urls).padStart(5)}  ${(d.usage_commercial ?? 'à qualifier').padEnd(15)}  ${d.domain}  (vu le ${seen}${d.first_query ? ` par « ${d.first_query} »` : ''})${d.explore_excluded ? '  [exclu]' : ''}`,
           );
         }
         if (rows.length === 0) console.log('(aucun domaine)');
@@ -155,6 +157,14 @@ async function main() {
           res.rewritten === null
             ? `Domaine ${res.domain} qualifié « ${res.usage} » ; facette usage-commercial absente de la base (lancer classify) : aucune URL réécrite.`
             : `Domaine ${res.domain} qualifié « ${res.usage} » : ${res.rewritten} URLs mises à jour.`,
+        );
+      } else if (subcommand === 'exclude' || subcommand === 'include') {
+        if (!values.domain) throw new Error(`domain ${subcommand} : --domain requis`);
+        const res = await setExploreExcluded({ domain: values.domain, excluded: subcommand === 'exclude' });
+        console.log(
+          res.excluded
+            ? `Domaine ${res.domain} exclu de l'exploration.`
+            : `Domaine ${res.domain} réintégré (reste exclu s'il est saturé).`,
         );
       } else {
         throw new Error(`Sous-commande domain inconnue : ${subcommand ?? '(aucune)'}`);
@@ -192,7 +202,7 @@ async function main() {
         console.log(
           q.error
             ? `  #${q.id} ${q.provider} p.${q.page} : erreur — ${q.error}`
-            : `  #${q.id} ${q.provider} p.${q.page} : ${q.results} résultats, ${q.newUrls} URLs nouvelles, ${q.newDomains} domaines nouveaux${q.exhausted ? ' (épuisée)' : ''}  « ${q.query} »`,
+            : `  #${q.id} ${q.provider} p.${q.page}${q.excluded ? ` (-${q.excluded} domaines)` : ''} : ${q.results} résultats, ${q.newUrls} URLs nouvelles, ${q.newDomains} domaines nouveaux${q.exhausted ? ' (épuisée)' : ''}  « ${q.query} »`,
         );
       }
       console.log(

@@ -147,4 +147,79 @@ describe.skipIf(!available)('exploration sur PostgreSQL', () => {
     expect(brave.queries[0].error).toMatch(/BRAVE_API_KEY manquante/);
     expect(sleeps).toEqual([1000]);
   });
+
+  describe('exclusion des domaines saturés', () => {
+    // `n` URLs normalisées par domaine, inscrites au registre.
+    async function corpus(counts) {
+      for (const [domain, n] of Object.entries(counts)) {
+        await query('INSERT INTO domain_profile (domain) VALUES ($1) ON CONFLICT DO NOTHING', [domain]);
+        await query(
+          `INSERT INTO url_item (raw_url, canonical_url, domain, status)
+           SELECT u, u, $1, 'normalized' FROM (SELECT 'https://' || $1 || '/' || i AS u FROM generate_series(1, $2) AS i) t`,
+          [domain, n],
+        );
+      }
+    }
+    // Brave échoue sans clé, après que l'ingestion a tracé la requête envoyée.
+    const lastSent = async () =>
+      (await query("SELECT detail FROM processing_run WHERE kind = 'ingest' ORDER BY id DESC LIMIT 1")).rows[0].detail;
+    const exploreBrave = (opts) => explore({ budget: 5, provider: 'brave', saturation: 2, ...opts });
+
+    it('requête Brave : saturés les plus gros d’abord et exclus à la main ; file inchangé', async () => {
+      await corpus({ 'a.com': 3, 'b.com': 5, 'c.com': 4, 'rare.com': 1 });
+      const domains = await import('../../src/domains/index.js');
+      await domains.setExploreExcluded({ domain: 'www.Pinterest.com', excluded: true });
+      const q = await ex.addQuery({ provider: 'brave', query: 'temple' });
+      await ex.addQuery({ provider: 'file', query: pages('f', [['https://f.com/1']]) });
+
+      const res = await exploreBrave();
+      expect(res.queries[0]).toMatchObject({ id: q.id, excluded: 4 });
+      expect(await lastSent()).toMatchObject({
+        query: 'temple',
+        sentQuery: 'temple -site:b.com -site:c.com -site:a.com -site:pinterest.com',
+      });
+
+      await explore({ budget: 5, provider: 'file', saturation: 2 });
+      expect(await lastSent()).not.toHaveProperty('sentQuery');
+    });
+
+    it('ensemble inchangé : pagination poursuivie ; ensemble changé : reprise page 0', async () => {
+      await corpus({ 'a.com': 3 });
+      const q = await ex.addQuery({ provider: 'brave', query: 'temple' });
+      await exploreBrave();
+      await query('UPDATE search_query SET next_page = 3, dry_runs = 1 WHERE id = $1', [q.id]);
+
+      expect((await exploreBrave()).queries[0].page).toBe(3);
+      expect(await row(q.id)).toMatchObject({ next_page: 3, dry_runs: 1 });
+
+      await corpus({ 'b.com': 3 });
+      expect((await exploreBrave()).queries[0].page).toBe(0);
+      expect(await row(q.id)).toMatchObject({ next_page: 0, dry_runs: 0 });
+    });
+
+    it('longueur bornée et requête ciblée par site: jamais auto-exclue', async () => {
+      await corpus({ 'unsplash.com': 9, 'pexels.com': 8, 'pixabay.com': 7 });
+      await ex.addQuery({ provider: 'brave', query: 'photo site:unsplash.com' });
+      await exploreBrave({ maxChars: 60 });
+      const { sentQuery } = await lastSent();
+      expect(sentQuery).toBe('photo site:unsplash.com -site:pexels.com -site:pixabay.com');
+      expect(sentQuery.length).toBeLessThanOrEqual(60);
+    });
+
+    it('domain include : réintégré sauf s’il est saturé ; domaine inconnu refusé', async () => {
+      await corpus({ 'small.com': 1, 'big.com': 3 });
+      const domains = await import('../../src/domains/index.js');
+      await domains.setExploreExcluded({ domain: 'small.com', excluded: true });
+      await domains.setExploreExcluded({ domain: 'big.com', excluded: true });
+      await domains.setExploreExcluded({ domain: 'small.com', excluded: false });
+      await domains.setExploreExcluded({ domain: 'big.com', excluded: false });
+      await expect(domains.setExploreExcluded({ domain: 'jamais.vu', excluded: false })).rejects.toThrow(
+        /Domaine inconnu du registre : jamais\.vu/,
+      );
+
+      await ex.addQuery({ provider: 'brave', query: 'temple' });
+      await exploreBrave();
+      expect((await lastSent()).sentQuery).toBe('temple -site:big.com');
+    });
+  });
 });
