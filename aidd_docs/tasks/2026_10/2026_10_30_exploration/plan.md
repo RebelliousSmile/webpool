@@ -36,7 +36,7 @@ status: pending
 
 | Decision | Why |
 | -------- | --- |
-| La facette `usage-commercial` (`libre`, `sous-conditions`, `payant`, `non-commercial`, `a-qualifier`) remplace la facette `licence`. | `licence: libre/commerciale` mélangeait la gratuité et le droit d'usage (« commerciale » désignait les banques payantes). Le registre tranche par domaine ; les motifs de la taxonomie ne font que pré-remplir. |
+| La facette `usage-commercial` (`libre`, `sous-conditions`, `payant`, `non-commercial`, `a-qualifier`) remplace la facette `licence`. | `licence: libre/commerciale` mélangeait la gratuité et le droit d'usage (« commerciale » désignait les banques payantes). Le registre tranche par domaine ; les motifs de la taxonomie ne font que pré-remplir. Validée par l'utilisateur le 2026-10-30, y compris « creative commons » en `sous-conditions`. |
 | Le registre (`domain_profile`) a le dernier mot sur les motifs de la taxonomie, et une qualification réécrit immédiatement la facette des URLs du domaine. | Une source rare n'est reconnue par aucun motif ; la qualifier une fois doit suffire, sans reclassifier tout le corpus. |
 | Le rendement d'une requête se mesure en domaines nouveaux, pas en URLs nouvelles. | Une requête qui ramène 20 nouvelles pages d'Unsplash n'aide pas à trouver des sources rares. |
 | Une requête épuisée n'est pas supprimée : elle redevient éligible, depuis la page 0, après un délai de repos configurable. | Le web change ; le registre de requêtes est l'actif qui s'accumule. |
