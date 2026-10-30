@@ -36,6 +36,18 @@ describe('CLI', () => {
     expect(stderr).toContain('Sous-commande pool inconnue : frobnicate');
   });
 
+  it('refuse une sous-commande domain inconnue avec le code 1', async () => {
+    const { code, stderr } = await cli('domain', 'frobnicate');
+    expect(code).toBe(1);
+    expect(stderr).toContain('Sous-commande domain inconnue : frobnicate');
+  });
+
+  it('refuse --usage hors liste avant toute connexion', async () => {
+    const { code, stderr } = await cli('domain', 'set', '--domain', 'a.com', '--usage', 'gratuit');
+    expect(code).toBe(1);
+    expect(stderr).toContain('--usage invalide : "gratuit" (attendu : libre, sous-conditions, payant, non-commercial)');
+  });
+
   it.each([['abc'], ['-3'], ['0'], ['1.5']])('refuse --limit=%s avec le code 1', async (value) => {
     const { code, stderr } = await cli('classify', `--limit=${value}`);
     expect(code).toBe(1);

@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { query, withTransaction } from '../db.js';
 import { withRun } from '../run.js';
 import { classifyItem } from './classifier.js';
+import { USAGE_FACET, loadQualifications } from '../domains/index.js';
 
 export function loadTaxonomy(path = config.taxonomyPath) {
   return JSON.parse(fs.readFileSync(path, 'utf8'));
@@ -165,6 +166,13 @@ export async function classifyPending({ limit = 100, reclassify = false, taxonom
           taxonomy,
         ),
       }));
+      // La qualification du registre l'emporte sur les motifs de la taxonomie.
+      if (ids.facetIds.has(USAGE_FACET)) {
+        const qualified = await loadQualifications(items.map((item) => item.domain));
+        for (const { item, result } of batch) {
+          if (qualified.has(item.domain)) result.facets[USAGE_FACET] = qualified.get(item.domain);
+        }
+      }
       await persistBatch(batch, ids, runId);
       classified += batch.length;
       unthemed += batch.filter(({ result }) => !result.primary).length;

@@ -1,6 +1,6 @@
 ---
 objective: "Une commande planifiable fait découvrir à webpool, run après run, des domaines qu'il ne connaissait pas, pour tout type de ressource, et le droit d'usage commercial devient une facette qualifiée une fois par domaine."
-status: pending
+status: in-progress
 ---
 
 <!-- Fill or omit these sections; never add, rename, or reorder one. -->

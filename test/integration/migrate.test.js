@@ -11,6 +11,8 @@ if (!available && dbRequired()) {
 }
 
 const MIGRATIONS = new URL('../../db/migrations/', import.meta.url);
+const FILES = fs.readdirSync(MIGRATIONS).filter((f) => /^\d{3}_.*\.sql$/.test(f)).sort();
+const ALL = FILES.map((f) => f.slice(0, 3));
 const versions = async (c) => (await c.query('SELECT version FROM schema_migration ORDER BY version')).rows.map((r) => r.version);
 const exists = async (c, table) => (await c.query('SELECT to_regclass($1) IS NOT NULL AS ok', [table])).rows[0].ok;
 
@@ -26,13 +28,13 @@ describe.skipIf(!available)('migrate', () => {
 
   it('crée le schéma sur une base vide, puis un rejeu n’applique rien', async () => {
     await withSchemaClient(async (c) => {
-      expect(await migrate({ client: c })).toEqual({ applied: ['001_init.sql'], baseline: false });
+      expect(await migrate({ client: c })).toEqual({ applied: FILES, baseline: false });
       expect(await exists(c, 'url_item')).toBe(true);
       expect(await exists(c, 'pool_item')).toBe(true);
-      expect(await versions(c)).toEqual(['001']);
+      expect(await versions(c)).toEqual(ALL);
 
       expect(await migrate({ client: c })).toEqual({ applied: [], baseline: false });
-      expect(await versions(c)).toEqual(['001']);
+      expect(await versions(c)).toEqual(ALL);
     });
   });
 
@@ -41,9 +43,28 @@ describe.skipIf(!available)('migrate', () => {
       await c.query(fs.readFileSync(new URL('001_init.sql', MIGRATIONS), 'utf8'));
       await c.query("INSERT INTO url_item (raw_url) VALUES ('https://a.com/x')");
 
-      expect(await migrate({ client: c })).toEqual({ applied: [], baseline: true });
-      expect(await versions(c)).toEqual(['001']);
+      expect(await migrate({ client: c })).toEqual({ applied: FILES.slice(1), baseline: true });
+      expect(await versions(c)).toEqual(ALL);
       expect((await c.query('SELECT raw_url FROM url_item')).rows).toEqual([{ raw_url: 'https://a.com/x' }]);
+    });
+  });
+
+  it('002 remplit le registre depuis les URLs normalisées, première découverte comprise', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'webpool-mig-'));
+    fs.copyFileSync(new URL('001_init.sql', MIGRATIONS), path.join(dir, '001_init.sql'));
+    await withSchemaClient(async (c) => {
+      await migrate({ client: c, dir });
+      await c.query(`INSERT INTO url_item (raw_url, domain, canonical_url, status) VALUES
+        ('https://a.com/1', 'a.com', 'https://a.com/1', 'classified'),
+        ('https://a.com/2', 'a.com', 'https://a.com/2', 'normalized'),
+        ('https://b.com/1', NULL, NULL, 'pending')`);
+      await c.query(`INSERT INTO url_source (url_item_id, provider, query, discovered_at) VALUES
+        (2, 'file', 'tardive', '2026-02-01'), (1, 'file', 'première', '2026-01-01')`);
+
+      fs.copyFileSync(new URL('002_domain_profile.sql', MIGRATIONS), path.join(dir, '002_domain_profile.sql'));
+      await migrate({ client: c, dir });
+      const { rows } = await c.query('SELECT domain, first_query, usage_commercial FROM domain_profile');
+      expect(rows).toEqual([{ domain: 'a.com', first_query: 'première', usage_commercial: null }]);
     });
   });
 
@@ -66,8 +87,8 @@ describe.skipIf(!available)('migrate', () => {
     await withSchemaClient((a) =>
       withSchemaClient(async (b) => {
         const results = await Promise.all([migrate({ client: a }), migrate({ client: b })]);
-        expect(results.flatMap((r) => r.applied)).toEqual(['001_init.sql']);
-        expect(await versions(a)).toEqual(['001']);
+        expect(results.flatMap((r) => r.applied)).toEqual(FILES);
+        expect(await versions(a)).toEqual(ALL);
       }),
     );
   });

@@ -55,12 +55,13 @@
       ]
     },
     {
-      "slug": "licence",
-      "label": "Licence présumée",
+      "slug": "usage-commercial",
+      "label": "Usage commercial",
       "values": [
-        { "value": "libre", "patterns": ["creative commons", "public domain", "domaine public", "cc0", "unsplash", "pexels", "pixabay", "openverse", "commons.wikimedia.org", "photo-ac.com"] },
-        { "value": "commerciale", "patterns": ["shutterstock", "gettyimages", "istockphoto", "adobe stock", "stock.adobe.com", "pixtastock", "alamy", "dreamstime", "depositphotos"] },
-        { "value": "inconnue", "patterns": [] }
+        { "value": "libre", "patterns": ["public domain", "domaine public", "cc0", "unsplash", "pexels", "pixabay", "openverse", "commons.wikimedia.org", "photo-ac.com"] },
+        { "value": "payant", "patterns": ["shutterstock", "gettyimages", "istockphoto", "adobe stock", "stock.adobe.com", "pixtastock", "alamy", "dreamstime", "depositphotos"] },
+        { "value": "sous-conditions", "patterns": ["creative commons"] },
+        { "value": "a-qualifier", "patterns": [] }
       ]
     },
     {

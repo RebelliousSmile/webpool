@@ -3,10 +3,26 @@ import { query, withTransaction } from '../db.js';
 import { withRun } from '../run.js';
 import { buildPoolQuery } from './criteria.js';
 
+// Une facette absente de la taxonomie en base viderait le pool sans bruit
+// (facette renommée, base jamais classée) : refus explicite.
+async function assertKnownFacets(def) {
+  const slugs = Object.keys(def.facets ?? {});
+  if (slugs.length === 0) return;
+  const { rows } = await query('SELECT slug FROM facet_definition ORDER BY slug');
+  const known = rows.map((r) => r.slug);
+  const missing = slugs.filter((s) => !known.includes(s));
+  if (missing.length > 0) {
+    throw new Error(
+      `Facette inconnue dans la définition : ${missing.join(', ')} (connues : ${known.join(', ') || 'aucune, lancer classify'})`,
+    );
+  }
+}
+
 // Un slug existant n'est remplacé qu'avec `force` : pas d'écrasement silencieux.
 export async function createPool({ slug, label, definitionFile, definition, force = false }) {
   const def = definition ?? JSON.parse(fs.readFileSync(definitionFile, 'utf8'));
   buildPoolQuery(def); // valide la définition avant insertion
+  await assertKnownFacets(def);
   const { rows } = await query(
     `INSERT INTO pool (slug, label, definition) VALUES ($1, $2, $3)
      ON CONFLICT (slug) DO ${force ? 'UPDATE SET label = EXCLUDED.label, definition = EXCLUDED.definition' : 'NOTHING'}
@@ -24,6 +40,7 @@ export async function refreshPool(slug) {
   if (rows.length === 0) throw new Error(`Pool inconnu : ${slug}`);
   const pool = rows[0];
 
+  await assertKnownFacets(pool.definition);
   return withRun('pool', { slug }, async (runId) => {
     const { text, values } = buildPoolQuery(pool.definition);
     const { rows: selected } = await query(text, values);

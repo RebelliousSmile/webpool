@@ -1,6 +1,6 @@
 {
   "theme": "photographie",
-  "facets": { "licence": "libre" },
+  "facets": { "usage-commercial": "libre" },
   "domains_exclude": ["pinterest.com"],
   "order": "quality",
   "limit": 20

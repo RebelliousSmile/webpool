@@ -1,10 +1,22 @@
 import { withTransaction } from '../db.js';
 import { withRun } from '../run.js';
+import { registerDomains } from '../domains/index.js';
+import { canonicalizeUrl, domainOf } from '../normalize/normalizer.js';
 import * as fileProvider from './providers/file.js';
 import * as braveProvider from './providers/brave.js';
 import * as searxngProvider from './providers/searxng.js';
 import * as europeanaProvider from './providers/europeana.js';
 import * as flickrProvider from './providers/flickr.js';
+
+// Domaine tel que la normalisation le calculera, sans réseau ; une URL invalide
+// ou non http n'a pas de domaine (la normalisation la marquera en erreur).
+function offlineDomain(url) {
+  try {
+    return domainOf(canonicalizeUrl(url));
+  } catch {
+    return null;
+  }
+}
 
 export const providers = {
   file: fileProvider,
@@ -27,6 +39,7 @@ export async function ingest({ provider, searchQuery, input, limit }) {
     const results = await impl.search({ query: searchQuery, input, limit });
     const urls = results.map((r) => r.url);
     let inserted = 0;
+    let newDomains = 0;
 
     // Trois requêtes par lot, quelle que soit sa taille. Une URL répétée dans la
     // SERP n'est insérée qu'une fois (ON CONFLICT) mais garde une source par occurrence.
@@ -52,9 +65,11 @@ export async function ingest({ provider, searchQuery, input, limit }) {
          SELECT item_id, $3, $4, serp_rank, $5 FROM unnest($1::bigint[], $2::int[]) AS t(item_id, serp_rank)`,
         [urls.map((u) => idByUrl.get(u)), results.map((r) => r.rank ?? null), provider, searchQuery, runId],
       );
+      // Un domaine n'est nouveau qu'une fois : la première requête le garde.
+      newDomains = (await registerDomains(client, urls.map(offlineDomain), searchQuery)).length;
     });
     const existing = results.length - inserted;
 
-    return { inserted, existing, total: results.length };
+    return { inserted, existing, total: results.length, newDomains };
   });
 }

@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import { createPool, refreshPool, listPools, showPool, loadPoolForExport } from '../src/pools/index.js';
 import { formatPool } from '../src/pools/export.js';
 import { stats } from '../src/stats.js';
+import { assertUsage, listDomains, qualifyDomain } from '../src/domains/index.js';
 
 const HELP = `webpool — pipeline d'URLs : ingestion, normalisation, classification, pools
 
@@ -21,6 +22,8 @@ Usage :
   webpool pool show --slug <slug>
   webpool pool export --slug <slug> [--format json|csv|md] [--out fichier]
   webpool pool list
+  webpool domain list [--to-qualify] [--limit N]
+  webpool domain set --domain <domaine> --usage libre|sous-conditions|payant|non-commercial [--note "…"]
   webpool stats
   webpool migrate                         (applique les migrations db/migrations manquantes)
 `;
@@ -38,6 +41,10 @@ const OPTIONS = {
   file: { type: 'string' },
   format: { type: 'string', default: 'json' },
   out: { type: 'string' },
+  domain: { type: 'string' },
+  usage: { type: 'string' },
+  note: { type: 'string' },
+  'to-qualify': { type: 'boolean', default: false },
   help: { type: 'boolean', short: 'h', default: false },
 };
 
@@ -119,6 +126,30 @@ async function main() {
         if (pools.length === 0) console.log('(aucun pool)');
       } else {
         throw new Error(`Sous-commande pool inconnue : ${subcommand ?? '(aucune)'}`);
+      }
+      break;
+    }
+    case 'domain': {
+      if (subcommand === 'list') {
+        const rows = await listDomains({ toQualify: values['to-qualify'], limit });
+        for (const d of rows) {
+          const seen = d.first_seen_at.toISOString().slice(0, 10);
+          console.log(
+            `${String(d.urls).padStart(5)}  ${(d.usage_commercial ?? 'à qualifier').padEnd(15)}  ${d.domain}  (vu le ${seen}${d.first_query ? ` par « ${d.first_query} »` : ''})`,
+          );
+        }
+        if (rows.length === 0) console.log('(aucun domaine)');
+      } else if (subcommand === 'set') {
+        if (!values.domain || !values.usage) throw new Error('domain set : --domain et --usage requis');
+        assertUsage(values.usage);
+        const res = await qualifyDomain({ domain: values.domain, usage: values.usage, note: values.note });
+        console.log(
+          res.rewritten === null
+            ? `Domaine ${res.domain} qualifié « ${res.usage} » ; facette usage-commercial absente de la base (lancer classify) : aucune URL réécrite.`
+            : `Domaine ${res.domain} qualifié « ${res.usage} » : ${res.rewritten} URLs mises à jour.`,
+        );
+      } else {
+        throw new Error(`Sous-commande domain inconnue : ${subcommand ?? '(aucune)'}`);
       }
       break;
     }

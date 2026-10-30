@@ -425,5 +425,102 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
       expect(out.pool.definition).toEqual(def);
       expect(out.items.map((i) => i.domain)).toEqual(['b.com', 'c.com', 'a.com']);
     });
+
+    it('refuse une facette absente de la base, à la création comme au refresh', async () => {
+      await setup();
+      await expect(pools.createPool({ slug: 'p', definition: { facets: { licence: 'libre' } } })).rejects.toThrow(
+        /Facette inconnue dans la définition : licence/,
+      );
+      await query(`INSERT INTO pool (slug, label, definition) VALUES ('old', 'old', '{"facets": {"licence": "libre"}}')`);
+      await expect(pools.refreshPool('old')).rejects.toThrow(/Facette inconnue dans la définition : licence/);
+    });
+  });
+
+  describe('registre des domaines', () => {
+    let domains;
+    beforeAll(async () => {
+      domains = await import('../../src/domains/index.js');
+    });
+    const usageOf = async (domain) =>
+      (
+        await query(
+          `SELECT ufv.value FROM url_facet_value ufv
+             JOIN facet_definition fd ON fd.id = ufv.facet_id AND fd.slug = 'usage-commercial'
+             JOIN url_item ui ON ui.id = ufv.url_item_id
+            WHERE ui.domain = $1 ORDER BY ui.id`,
+          [domain],
+        )
+      ).rows.map((r) => r.value);
+
+    it('ingest enregistre chaque domaine une fois, avec sa première requête', async () => {
+      const first = await ingestUrls(['https://www.a.com/1', 'https://a.com/2', 'https://b.com/1', 'mailto:x@c.com'], 'q1');
+      expect(first.newDomains).toBe(2);
+      const second = await ingestUrls(['https://b.com/2', 'https://c.com/1'], 'q2');
+      expect(second.newDomains).toBe(1);
+      const { rows } = await query('SELECT domain, first_query, usage_commercial FROM domain_profile ORDER BY domain');
+      expect(rows).toEqual([
+        { domain: 'a.com', first_query: 'q1', usage_commercial: null },
+        { domain: 'b.com', first_query: 'q1', usage_commercial: null },
+        { domain: 'c.com', first_query: 'q2', usage_commercial: null },
+      ]);
+    });
+
+    it('normalize ajoute le domaine atteint par redirection', async () => {
+      await ingestUrls(['https://short.link/x'], 'courte');
+      const fetcher = async () => ({ finalUrl: 'https://cible.org/page', httpStatus: 200, html: '' });
+      await normalizePending({ fetcher });
+      const { rows } = await query('SELECT domain, first_query FROM domain_profile ORDER BY domain');
+      expect(rows).toEqual([
+        { domain: 'cible.org', first_query: 'courte' },
+        { domain: 'short.link', first_query: 'courte' },
+      ]);
+    });
+
+    it('domain list : URLs comptées, filtre à qualifier', async () => {
+      await ingestUrls(['https://a.com/1', 'https://a.com/2', 'https://b.com/1']);
+      await normalizePending({ offline: true });
+      await query(`UPDATE domain_profile SET usage_commercial = 'libre' WHERE domain = 'b.com'`);
+      const all = await domains.listDomains();
+      expect(all.map((d) => [d.domain, d.urls, d.usage_commercial])).toEqual([
+        ['a.com', 2, null],
+        ['b.com', 1, 'libre'],
+      ]);
+      expect((await domains.listDomains({ toQualify: true })).map((d) => d.domain)).toEqual(['a.com']);
+    });
+
+    it('la qualification réécrit la facette sans reclasser et survit à classify --all', async () => {
+      await ingestUrls(['https://unsplash.com/photos/x', 'https://blue-wind.net/a', 'https://blue-wind.net/b']);
+      await normalizePending({ offline: true });
+      await classifyPending();
+      expect(await usageOf('unsplash.com')).toEqual(['libre']);
+      expect(await usageOf('blue-wind.net')).toEqual(['a-qualifier', 'a-qualifier']);
+
+      const res = await domains.qualifyDomain({ domain: 'www.Blue-Wind.net', usage: 'sous-conditions', note: 'CC BY' });
+      expect(res).toEqual({ domain: 'blue-wind.net', usage: 'sous-conditions', rewritten: 2 });
+      expect(await usageOf('blue-wind.net')).toEqual(['sous-conditions', 'sous-conditions']);
+
+      await domains.qualifyDomain({ domain: 'unsplash.com', usage: 'payant' });
+      await classifyPending({ reclassify: true });
+      expect(await usageOf('unsplash.com')).toEqual(['payant']);
+      expect(await usageOf('blue-wind.net')).toEqual(['sous-conditions', 'sous-conditions']);
+      const { rows } = await query(`SELECT note, reviewed_at IS NOT NULL AS reviewed FROM domain_profile WHERE domain = 'blue-wind.net'`);
+      expect(rows).toEqual([{ note: 'CC BY', reviewed: true }]);
+    });
+
+    it('base jamais classée : seul le registre est écrit', async () => {
+      await ingestUrls(['https://a.com/1']);
+      const res = await domains.qualifyDomain({ domain: 'a.com', usage: 'libre' });
+      expect(res.rewritten).toBeNull();
+      expect(await count('domain_profile', "usage_commercial = 'libre'")).toBe(1);
+    });
+
+    it('domaine absent ou valeur invalide : erreur, rien écrit', async () => {
+      await ingestUrls(['https://a.com/1']);
+      await expect(domains.qualifyDomain({ domain: 'absent.org', usage: 'libre' })).rejects.toThrow(
+        /Domaine inconnu du registre : absent\.org/,
+      );
+      await expect(domains.qualifyDomain({ domain: 'a.com', usage: 'gratuit' })).rejects.toThrow(/--usage invalide/);
+      expect(await count('domain_profile', 'usage_commercial IS NOT NULL')).toBe(0);
+    });
   });
 });

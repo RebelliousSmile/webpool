@@ -38,10 +38,18 @@ describe('taxonomie réelle — détections attendues', () => {
     expect(classify({ title: 'Goat Island', queries: ['Goto Islands photos'] }).facets.lieu).toBe('autre');
   });
 
-  it('unsplash.com : photographie, licence libre', () => {
+  it('unsplash.com : photographie, usage commercial libre', () => {
     const res = classify({ url: 'https://unsplash.com/photos/forest' });
     expect(res.primary).toBe('photographie');
-    expect(res.facets.licence).toBe('libre');
+    expect(res.facets['usage-commercial']).toBe('libre');
+  });
+
+  it('usage commercial : payant, sous conditions, à qualifier par défaut', () => {
+    const usage = (opts) => classify(opts).facets['usage-commercial'];
+    expect(usage({ url: 'https://www.shutterstock.com/search/kyoto' })).toBe('payant');
+    expect(usage({ title: 'Licensed under Creative Commons BY-SA' })).toBe('sous-conditions');
+    expect(usage({ url: 'https://blue-wind.net/kyoto' })).toBe('a-qualifier');
+    expect(usage({ queries: ['unsplash kyoto'] })).toBe('a-qualifier');
   });
 
   it('youtube.com est une vidéo, docs. un tutoriel', () => {
