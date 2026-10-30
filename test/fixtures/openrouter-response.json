@@ -1,0 +1,17 @@
+{
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "ok",
+        "annotations": [
+          { "type": "url_citation", "url_citation": { "url": "https://urban3p.ru/spb/1", "title": "Заброшенный завод" } },
+          { "type": "url_citation", "url_citation": { "url": "https://example.com/no-title", "title": "" } },
+          { "type": "url_citation", "url_citation": { "url": "https://urban3p.ru/spb/1", "title": "Doublon" } },
+          { "type": "file", "file": { "name": "ignoré" } }
+        ]
+      }
+    }
+  ],
+  "usage": { "prompt_tokens": 2100, "completion_tokens": 1, "cost": 0.0055 }
+}

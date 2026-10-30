@@ -4,7 +4,7 @@ import { query } from '../db.js';
 import { withRun } from '../run.js';
 import { ingest, providers } from '../ingest/index.js';
 import { isRested, nextState, priority, selectQueries } from './frontier.js';
-import { applyExclusion, saturatedDomains } from './exclusion.js';
+import { applyExclusion, excludableDomains, saturatedDomains } from './exclusion.js';
 
 export const QUERY_STATUSES = ['active', 'exhausted', 'paused'];
 
@@ -120,6 +120,29 @@ async function wakeRested({ provider, now, restDays }) {
 // Seul Brave reçoit l'exclusion : l'opérateur -site: y a été vérifié ; searxng
 // dépend de ses moteurs.
 const EXCLUDING_PROVIDERS = new Set(['brave']);
+// OpenRouter reçoit les domaines par paramètre (`exclude_domains`), sans limite de
+// longueur de requête ; le plafond borne la taille de l'appel.
+const PARAM_EXCLUDING_PROVIDERS = new Set(['openrouter']);
+const EXCLUDE_DOMAINS_MAX = 50;
+
+// Provider de repli : relance la même requête quand l'appel au provider échoue.
+export const FALLBACKS = Object.freeze({ openrouter: 'brave' });
+
+const excludes = (provider) => EXCLUDING_PROVIDERS.has(provider) || PARAM_EXCLUDING_PROVIDERS.has(provider);
+
+// Exclusion envoyée à `provider` : suffixe `-site:` ou liste de domaines.
+function exclusionFor(provider, text, saturated, maxChars) {
+  if (EXCLUDING_PROVIDERS.has(provider)) {
+    const exclusion = applyExclusion(text, saturated, maxChars);
+    const excluded = exclusion.excluded.length;
+    return { sentQuery: excluded ? exclusion.query : undefined, excluded, hash: exclusion.hash };
+  }
+  if (PARAM_EXCLUDING_PROVIDERS.has(provider)) {
+    const domains = excludableDomains(text, saturated).slice(0, EXCLUDE_DOMAINS_MAX);
+    return { excludeDomains: domains.length ? domains : undefined, excluded: domains.length, hash: null };
+  }
+  return { excluded: 0, hash: null };
+}
 
 // Même compte que `domain list` : URLs normalisées ou classées.
 async function loadSaturated(threshold) {
@@ -134,12 +157,14 @@ async function loadSaturated(threshold) {
 
 // Pour le provider file, la requête est le chemin de l'export ; `{page}` y
 // désigne la page demandée.
-function inputFor(q, page) {
-  return q.provider === 'file' ? q.query.replaceAll('{page}', String(page)) : undefined;
+function inputFor(provider, text, page) {
+  return provider === 'file' ? text.replaceAll('{page}', String(page)) : undefined;
 }
 
-// Au plus `budget` appels aux providers : un par requête choisie. Une erreur de
-// provider est notée sur la requête (la page n'avance pas) sans arrêter le run.
+// Au plus `budget` requêtes choisies, un appel chacune. Une erreur de provider est
+// notée sur la requête (la page n'avance pas) sans arrêter le run. Si le provider
+// a un repli (`fallbacks`), la requête y est relancée depuis la page 0 : le passage
+// compte, mais l'état de la requête (page, épuisement) reste celui de son provider.
 export async function explore({
   budget,
   provider,
@@ -149,6 +174,7 @@ export async function explore({
   saturation = config.exploreSaturation,
   maxChars = config.exploreQueryMaxChars,
   delayMs = 1000,
+  fallbacks = FALLBACKS,
   sleep = sleepMs,
   now = () => new Date(),
 }) {
@@ -158,19 +184,28 @@ export async function explore({
   return withRun('explore', { budget, provider: provider ?? null }, async (runId) => {
     const woken = await wakeRested({ provider, now: now(), restDays });
     const chosen = selectQueries(await loadQueries({ status: 'active', provider }), budget);
-    const saturated = chosen.some((q) => EXCLUDING_PROVIDERS.has(q.provider)) ? await loadSaturated(saturation) : [];
+    const saturated = chosen.some((q) => excludes(q.provider) || excludes(fallbacks[q.provider]))
+      ? await loadSaturated(saturation)
+      : [];
     const queries = [];
     let braveCalled = false;
+
+    const call = async (provider, text, page) => {
+      if (provider === 'brave' && braveCalled) await sleep(delayMs);
+      if (provider === 'brave') braveCalled = true;
+      const exclusion = exclusionFor(provider, text, saturated, maxChars);
+      const res = await ingest({
+        provider, searchQuery: text, sentQuery: exclusion.sentQuery, excludeDomains: exclusion.excludeDomains,
+        input: inputFor(provider, text, page), limit, page,
+      });
+      return { ...res, excluded: exclusion.excluded };
+    };
 
     for (const q of chosen) {
       let page = q.nextPage;
       let dryRuns = q.dryRuns;
-      let sentQuery;
-      let excluded = 0;
       if (EXCLUDING_PROVIDERS.has(q.provider)) {
-        const exclusion = applyExclusion(q.query, saturated, maxChars);
-        excluded = exclusion.excluded.length;
-        if (excluded) sentQuery = exclusion.query;
+        const exclusion = exclusionFor(q.provider, q.query, saturated, maxChars);
         // Autre ensemble exclu : les pages changent de contenu, la pagination repart de 0.
         if (exclusion.hash !== q.exclusionHash) {
           page = 0;
@@ -181,17 +216,32 @@ export async function explore({
           ]);
         }
       }
-      if (q.provider === 'brave' && braveCalled) await sleep(delayMs);
-      if (q.provider === 'brave') braveCalled = true;
+      let servedBy = q.provider;
+      let fallbackError = null;
       try {
-        const res = await ingest({
-          provider: q.provider, searchQuery: q.query, sentQuery, input: inputFor(q, page), limit, page,
-        });
-        const state = nextState({ provider: q.provider, page, newUrls: res.inserted, dryRuns, dryRunsLimit });
+        let res;
+        try {
+          res = await call(q.provider, q.query, page);
+        } catch (err) {
+          const fallback = fallbacks[q.provider];
+          if (!fallback) throw err;
+          fallbackError = String(err.message ?? err);
+          servedBy = fallback;
+          try {
+            res = await call(fallback, q.query, 0);
+          } catch (err2) {
+            throw new Error(`${fallbackError} ; repli ${fallback} : ${err2.message ?? err2}`);
+          }
+        }
+        const runPage = servedBy === q.provider ? page : 0;
+        // Un passage servi par le repli ne fait avancer ni la page ni l'épuisement.
+        const state = servedBy === q.provider
+          ? nextState({ provider: q.provider, page, newUrls: res.inserted, dryRuns, dryRunsLimit })
+          : { nextPage: page, dryRuns, exhausted: false };
         await query(
           `INSERT INTO search_query_run (search_query_id, page, results, new_urls, new_domains, run_id)
            VALUES ($1, $2, $3, $4, $5, $6)`,
-          [q.id, page, res.total, res.inserted, res.newDomains, runId],
+          [q.id, runPage, res.total, res.inserted, res.newDomains, runId],
         );
         await query(
           `UPDATE search_query
@@ -202,8 +252,8 @@ export async function explore({
           [q.id, state.exhausted ? 0 : state.nextPage, state.dryRuns, state.exhausted],
         );
         queries.push({
-          id: q.id, provider: q.provider, query: q.query, page, excluded,
-          results: res.total, newUrls: res.inserted, newDomains: res.newDomains,
+          id: q.id, provider: q.provider, servedBy, fallbackError, query: q.query, page: runPage,
+          excluded: res.excluded, results: res.total, newUrls: res.inserted, newDomains: res.newDomains,
           exhausted: state.exhausted, error: null,
         });
       } catch (err) {
@@ -214,8 +264,8 @@ export async function explore({
         );
         await query('UPDATE search_query SET last_run_at = now() WHERE id = $1', [q.id]);
         queries.push({
-          id: q.id, provider: q.provider, query: q.query, page, excluded,
-          results: 0, newUrls: 0, newDomains: 0, exhausted: false, error,
+          id: q.id, provider: q.provider, servedBy: null, fallbackError: null, query: q.query, page,
+          excluded: exclusionFor(q.provider, q.query, saturated, maxChars).excluded, results: 0, newUrls: 0, newDomains: 0, exhausted: false, error,
         });
       }
     }

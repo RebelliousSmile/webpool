@@ -50,6 +50,9 @@ describe('frontière — état après un passage', () => {
 
   it('épuisée après la dernière page du provider', () => {
     expect(maxPage('brave')).toBe(9);
+    // OpenRouter ne pagine pas : épuisée dès le premier passage réussi.
+    expect(maxPage('openrouter')).toBe(0);
+    expect(nextState({ provider: 'openrouter', page: 0, newUrls: 5, dryRunsLimit: 2 }).exhausted).toBe(true);
     expect(nextState({ provider: 'brave', page: 8, newUrls: 5, dryRunsLimit: 2 }).exhausted).toBe(false);
     expect(nextState({ provider: 'brave', page: 9, newUrls: 5, dryRunsLimit: 2 }).exhausted).toBe(true);
   });

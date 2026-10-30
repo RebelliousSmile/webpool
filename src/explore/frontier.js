@@ -1,8 +1,9 @@
 // Frontière d'exploration — fonctions pures (aucune I/O) : quelle requête
 // relancer, à quelle page, et quand l'abandonner.
 
-// Dernière page interrogeable par provider (Brave : offset 0 à 9).
-const MAX_PAGE = { brave: 9 };
+// Dernière page interrogeable par provider (Brave : offset 0 à 9 ; OpenRouter
+// ne pagine pas : une requête s'épuise au premier passage, puis se repose).
+const MAX_PAGE = { brave: 9, openrouter: 0 };
 const DEFAULT_MAX_PAGE = 9;
 
 export function maxPage(provider) {

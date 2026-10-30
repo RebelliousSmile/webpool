@@ -18,14 +18,18 @@ export function targetedSites(query) {
 
 const related = (a, b) => a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
 
+// Domaines saturés que la requête ne vise pas par `site:`, dans leur ordre.
+export function excludableDomains(query, domains) {
+  const targeted = targetedSites(query);
+  return domains.filter((domain) => !targeted.some((t) => related(t, domain)));
+}
+
 // Suffixe `-site:` ajouté tant que la requête reste sous `maxChars` ; la requête
 // d'origine n'est jamais coupée. `hash` est null quand rien n'est exclu.
 export function applyExclusion(query, domains, maxChars) {
-  const targeted = targetedSites(query);
   const excluded = [];
   let sent = query;
-  for (const domain of domains) {
-    if (targeted.some((t) => related(t, domain))) continue;
+  for (const domain of excludableDomains(query, domains)) {
     const next = `${sent} -site:${domain}`;
     if (next.length > maxChars) break;
     sent = next;

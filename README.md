@@ -85,6 +85,7 @@ pnpm webpool ingest --query "forest lora" --provider brave
 pnpm webpool ingest --query "forest lora" --provider searxng     # SEARXNG_URL
 pnpm webpool ingest --query "forêt" --provider europeana        # EUROPEANA_API_KEY
 pnpm webpool ingest --query "forest" --provider flickr          # FLICKR_API_KEY
+pnpm webpool ingest --query "forest lora" --provider openrouter  # OPENROUTER_API_KEY
 
 pnpm webpool normalize            # suit les redirections, canonise, déduplique
 pnpm webpool normalize --offline  # sans réseau : canonise l'URL brute
@@ -201,6 +202,17 @@ d'URL canonique, sans fusion avec l'autre site.
 | `searxng` | `SEARXNG_URL` | méta-moteur auto-hébergé, sans clé ; format JSON à activer |
 | `europeana` | `EUROPEANA_API_KEY` | patrimoine culturel |
 | `flickr` | `FLICKR_API_KEY` | photographie |
+| `openrouter` | `OPENROUTER_API_KEY` | plugin web d'OpenRouter ; repli sur `brave` dans `explore` |
+
+Le provider `openrouter` lit les URLs dans les annotations `url_citation` du
+plugin `web`, qui rendent tous les résultats de recherche : la réponse du modèle
+n'est jamais lue. `OPENROUTER_ENGINE` choisit le moteur (`perplexity` par défaut,
+`exa`, `parallel`), `OPENROUTER_MODEL` le modèle (`openai/gpt-4.1-nano` par
+défaut, 5 tokens de sortie au plus) et `OPENROUTER_TIMEOUT_MS` le délai d'appel
+(60 s par défaut). Sur 5 requêtes de test, Perplexity coûtait environ 0,0055 $
+l'appel de 20 résultats, Exa 0,0175 $ et Parallel 0,016 $, et 70 à 75 % des
+domaines trouvés étaient absents des résultats de Brave. Ce provider ne pagine
+pas : une requête s'épuise au premier passage, puis revient après le repos.
 
 Google Custom Search n'est pas retenu : l'API est fermée aux nouveaux clients et
 s'arrête le 1er janvier 2027.
@@ -242,7 +254,10 @@ requête est épuisée après la page 9, ou après `WEBPOOL_EXPLORE_DRY_RUNS`
 passages consécutifs sans URL nouvelle. Elle revient alors, depuis la page 0,
 après `WEBPOOL_EXPLORE_REST_DAYS` jours. Une erreur de provider est notée sur la
 requête (`search_query_run.error`) sans faire avancer la page ni arrêter le
-run. Pour le provider `file`, la requête est le chemin de l'export, et `{page}`
+run. Une requête `openrouter` dont l'appel échoue (réseau, crédit épuisé, clé
+absente…) est relancée sur Brave, page 0 : le passage compte, les URLs sont
+tracées sous `brave`, mais la requête garde sa page et son état. La sortie
+d'`explore` l'indique par `openrouter→brave (repli : …)`. Pour le provider `file`, la requête est le chemin de l'export, et `{page}`
 y est remplacé par le numéro de page.
 
 **Exclusion des domaines saturés.** Avant chaque appel à Brave, la requête reçoit
@@ -251,7 +266,9 @@ un suffixe `-site:` par domaine saturé : un domaine qui compte plus de
 avec `domain exclude`. Les domaines les plus gros passent en premier. Le suffixe
 s'arrête dès que la requête dépasserait `WEBPOOL_EXPLORE_QUERY_MAX_CHARS`
 caractères. Un domaine visé par un `site:` de la requête n'est jamais exclu. Si
-l'ensemble exclu change, la requête repart de la page 0.
+l'ensemble exclu change, la requête repart de la page 0. OpenRouter reçoit les mêmes
+domaines, au plus 50, dans le paramètre `exclude_domains`, sans toucher à la
+requête.
 
 **Registre et facette `usage-commercial`.** Chaque domaine découvert entre dans
 le registre, avec la date et la requête de sa découverte. Il y reste « à
@@ -364,7 +381,7 @@ sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
 | Chemin | Rôle |
 |---|---|
 | `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) ; `002` à `004` : domain_profile, search_query, search_query_run, exclusion_hash |
-| `src/ingest/` | Providers SERP (`file`, `brave`, `searxng`, `europeana`, `flickr`) + insertion tracée |
+| `src/ingest/` | Providers SERP (`file`, `brave`, `searxng`, `europeana`, `flickr`, `openrouter`) + insertion tracée |
 | `src/normalize/` | Canonisation stricte (tracking, redirections, dédup domaine+canonique), fetch poli |
 | `src/classify/` | Classifieur par règles piloté par `config/taxonomy.json` |
 | `src/migrate.js` | Runner de migrations (`webpool migrate`) |

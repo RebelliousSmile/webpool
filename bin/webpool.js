@@ -204,7 +204,7 @@ async function main() {
         console.log(
           q.error
             ? `  #${q.id} ${q.provider} p.${q.page} : erreur — ${q.error}`
-            : `  #${q.id} ${q.provider} p.${q.page}${q.excluded ? ` (-${q.excluded} domaines)` : ''} : ${q.results} résultats, ${q.newUrls} URLs nouvelles, ${q.newDomains} domaines nouveaux${q.exhausted ? ' (épuisée)' : ''}  « ${q.query} »`,
+            : `  #${q.id} ${q.servedBy === q.provider ? q.provider : `${q.provider}→${q.servedBy} (repli : ${q.fallbackError})`} p.${q.page}${q.excluded ? ` (-${q.excluded} domaines)` : ''} : ${q.results} résultats, ${q.newUrls} URLs nouvelles, ${q.newDomains} domaines nouveaux${q.exhausted ? ' (épuisée)' : ''}  « ${q.query} »`,
         );
       }
       console.log(

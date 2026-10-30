@@ -7,6 +7,7 @@ import * as braveProvider from './providers/brave.js';
 import * as searxngProvider from './providers/searxng.js';
 import * as europeanaProvider from './providers/europeana.js';
 import * as flickrProvider from './providers/flickr.js';
+import * as openrouterProvider from './providers/openrouter.js';
 
 // Domaine tel que la normalisation le calculera, sans réseau ; une URL invalide
 // ou non http n'a pas de domaine (la normalisation la marquera en erreur).
@@ -24,22 +25,28 @@ export const providers = {
   searxng: searxngProvider,
   europeana: europeanaProvider,
   flickr: flickrProvider,
+  openrouter: openrouterProvider,
 };
 
 // US-03 : chaque URL candidate est insérée (ou retrouvée) dans url_item, et sa
 // découverte tracée dans url_source (provider, requête, rang, date, run).
 // `sentQuery` (requête augmentée d'exclusions) part au provider ; seule
-// `searchQuery` est tracée.
-export async function ingest({ provider = 'file', searchQuery, sentQuery, input, limit, page = 0 }) {
+// `searchQuery` est tracée. `excludeDomains` part aux providers qui filtrent par
+// paramètre (OpenRouter) plutôt que par `-site:`.
+export async function ingest({ provider = 'file', searchQuery, sentQuery, excludeDomains, input, limit, page = 0 }) {
   const impl = providers[provider];
   if (!impl) {
     throw new Error(`Provider inconnu : ${provider} (disponibles : ${Object.keys(providers).join(', ')})`);
   }
   if (!searchQuery) throw new Error('Option --query requise');
 
-  const detail = { provider, query: searchQuery, page, ...(sentQuery ? { sentQuery } : {}) };
+  const detail = {
+    provider, query: searchQuery, page,
+    ...(sentQuery ? { sentQuery } : {}),
+    ...(excludeDomains?.length ? { excludeDomains } : {}),
+  };
   return withRun('ingest', detail, async (runId) => {
-    const results = await impl.search({ query: sentQuery ?? searchQuery, input, limit, page });
+    const results = await impl.search({ query: sentQuery ?? searchQuery, excludeDomains, input, limit, page });
     const urls = results.map((r) => r.url);
     let inserted = 0;
     let newDomains = 0;

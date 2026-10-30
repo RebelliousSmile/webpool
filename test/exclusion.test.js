@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { applyExclusion, exclusionHash, saturatedDomains, targetedSites } from '../src/explore/exclusion.js';
+import {
+  applyExclusion,
+  excludableDomains,
+  exclusionHash,
+  saturatedDomains,
+  targetedSites,
+} from '../src/explore/exclusion.js';
 
 describe('exclusion — domaines saturés', () => {
   const rows = [
@@ -42,5 +48,14 @@ describe('exclusion — suffixe -site:', () => {
     expect(exclusionHash(['a.com', 'b.com'])).not.toBe(exclusionHash(['a.com']));
     expect(exclusionHash(['a.com', 'b.com'])).toMatch(/^[0-9a-f]{40}$/);
     expect(exclusionHash([])).toBeNull();
+  });
+});
+
+describe('exclusion — liste de domaines (OpenRouter)', () => {
+  it('garde l’ordre et écarte les domaines visés par site:, sous-domaines compris', () => {
+    expect(excludableDomains('photo site:unsplash.com', ['images.unsplash.com', 'pexels.com', 'unsplash.com'])).toEqual([
+      'pexels.com',
+    ]);
+    expect(excludableDomains('photo', ['b.com', 'a.com'])).toEqual(['b.com', 'a.com']);
   });
 });

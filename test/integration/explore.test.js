@@ -19,6 +19,7 @@ describe.skipIf(!available)('exploration sur PostgreSQL', () => {
     // Jamais d'appel réseau : sans clé, Brave échoue avant toute requête
     // (process.loadEnvFile n'écrase pas une variable déjà définie).
     process.env.BRAVE_API_KEY = '';
+    process.env.OPENROUTER_API_KEY = '';
     await createSchema();
     db = await import('../../src/db.js');
     ex = await import('../../src/explore/index.js');
@@ -220,6 +221,50 @@ describe.skipIf(!available)('exploration sur PostgreSQL', () => {
       await ex.addQuery({ provider: 'brave', query: 'temple' });
       await exploreBrave();
       expect((await lastSent()).sentQuery).toBe('temple -site:big.com');
+    });
+
+    it('requête OpenRouter : saturés transmis en exclude_domains, requête inchangée', async () => {
+      await corpus({ 'a.com': 3, 'b.com': 5, 'rare.com': 1 });
+      await ex.addQuery({ provider: 'openrouter', query: 'temple site:a.com' });
+      const res = await explore({ budget: 5, provider: 'openrouter', saturation: 2, fallbacks: {} });
+      expect(res.queries[0]).toMatchObject({ excluded: 1, error: expect.stringMatching(/OPENROUTER_API_KEY manquante/) });
+      const sent = await lastSent();
+      expect(sent).toMatchObject({ provider: 'openrouter', query: 'temple site:a.com', excludeDomains: ['b.com'] });
+      expect(sent).not.toHaveProperty('sentQuery');
+    });
+  });
+
+  describe('repli quand le provider échoue', () => {
+    it('OpenRouter en échec : la requête est servie par le repli, le passage compte, la page et l’état restent', async () => {
+      // Repli sur file pour rester hors réseau : la requête est alors le chemin de l'export.
+      const q = await ex.addQuery({ provider: 'openrouter', query: pages('or', [['https://repli.com/1']]) });
+
+      const res = await explore({ budget: 1, fallbacks: { openrouter: 'file' } });
+      expect(res).toMatchObject({ calls: 1, errors: 0, newUrls: 1 });
+      expect(res.queries[0]).toMatchObject({
+        provider: 'openrouter', servedBy: 'file', page: 0, exhausted: false,
+        fallbackError: expect.stringMatching(/OPENROUTER_API_KEY manquante/),
+      });
+      expect(await row(q.id)).toMatchObject({ status: 'active', next_page: 0, runs: 1, dry_runs: 0 });
+      const runs = (await query('SELECT page, new_urls, error FROM search_query_run WHERE search_query_id = $1', [q.id])).rows;
+      expect(runs).toEqual([{ page: 0, new_urls: 1, error: null }]);
+      const sources = (await query('SELECT provider FROM url_source')).rows.map((r) => r.provider);
+      expect(sources).toEqual(['file']);
+    });
+
+    it('repli Brave par défaut, en échec aussi : les deux erreurs sont notées', async () => {
+      const q = await ex.addQuery({ provider: 'openrouter', query: 'temple' });
+      const res = await explore({ budget: 1 });
+      expect(res).toMatchObject({ calls: 1, errors: 1 });
+      expect(res.queries[0].error).toMatch(/OPENROUTER_API_KEY manquante.*; repli brave : BRAVE_API_KEY manquante/);
+      expect(await row(q.id)).toMatchObject({ status: 'active', next_page: 0, runs: 0 });
+    });
+
+    it('sans repli défini, l’erreur du provider reste seule', async () => {
+      await ex.addQuery({ provider: 'openrouter', query: 'temple' });
+      const res = await explore({ budget: 1, fallbacks: {} });
+      expect(res.queries[0].error).toMatch(/^OPENROUTER_API_KEY manquante/);
+      expect(res.queries[0].error).not.toMatch(/repli/);
     });
   });
 });
