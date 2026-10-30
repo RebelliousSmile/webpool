@@ -102,7 +102,9 @@ function ssh(remoteCommand, { inherit = false } = {}) {
 }
 
 function rsync(destDir, { dryRun, linkDest }) {
-  const args = ['rsync', '-rlz', '--delete', '--checksum', '--chmod=D755,F644', '--itemize-changes'];
+  // -p : sans lui, --chmod n'est pas appliqué et --link-dest lie aussi des fichiers
+  // aux droits différents (le lien dur partage l'inode, donc les droits de l'ancien)
+  const args = ['rsync', '-rlpz', '--delete', '--checksum', '--chmod=D755,F644', '--itemize-changes'];
   if (dryRun) args.push('--dry-run');
   // relatif au répertoire de destination : les fichiers inchangés sont des liens durs
   if (linkDest) args.push(`--link-dest=../${basename(target.appDir)}`);
