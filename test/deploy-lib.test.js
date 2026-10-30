@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
+  DATABASE_URL_CHECK,
   assertNodeSupported,
   assertWslHome,
   backupFileName,
@@ -133,5 +138,34 @@ describe('withRemoteLock', () => {
     const body = vi.fn();
     await expect(withRemoteLock(ssh, target, body)).rejects.toThrow(/Verrou déjà pris/);
     expect(body).not.toHaveBeenCalled();
+  });
+});
+
+describe('DATABASE_URL_CHECK', () => {
+  const run = (url) => {
+    const dir = mkdtempSync(join(tmpdir(), 'webpool-env-'));
+    const file = join(dir, 'x.env');
+    writeFileSync(file, url === undefined ? 'AUTRE=1\n' : `DATABASE_URL=${url}\n`);
+    try {
+      return execFileSync(process.execPath, ['-e', DATABASE_URL_CHECK, file], { encoding: 'utf8' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('accepte une URL encodée sur le port 5432', () => {
+    expect(run('postgres://u:a%25b%40c@h.example:5432/base')).toBe('');
+  });
+
+  it('diagnostique sans jamais recopier le mot de passe', () => {
+    const out = run('postgres://u:SECRETx5%gH@h.example:5432/base');
+    expect(out).toMatch(/mot de passe mal encodé/);
+    expect(out).not.toMatch(/SECRET/);
+  });
+
+  it('refuse une URL absente, le port 5433 et un autre schéma', () => {
+    expect(run(undefined)).toBe('absente');
+    expect(run('postgres://u:p@h.example:5433/base')).toMatch(/5433/);
+    expect(run('mysql://u:p@h.example/base')).toMatch(/schéma/);
   });
 });

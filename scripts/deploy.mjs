@@ -17,6 +17,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   DEPLOY_PATHS,
+  DATABASE_URL_CHECK,
   HTACCESS_DENY,
   assertNodeSupported,
   assertWslHome,
@@ -131,6 +132,10 @@ if (ssh(`test -f "$HOME"/${target.envFile} && echo present || echo absent`).trim
   ].join('\n'));
 }
 const nodeRemote = assertNodeSupported(ssh(`${node} --version`));
+// DATABASE_URL vérifiée avant toute mutation, avec un diagnostic qui ne la cite
+// jamais : pg_dump, lui, recopie le fragment fautif (donc le mot de passe).
+const urlProblem = ssh(`${node} -e ${shQuote(DATABASE_URL_CHECK)} "$HOME"/${target.envFile}`).trim();
+if (urlProblem) throw new Error(`DATABASE_URL de ~/${target.envFile} : ${urlProblem}`);
 if (ssh('command -v pg_dump >/dev/null && echo present || echo absent').trim() !== 'present') {
   throw new Error('pg_dump introuvable sur la cible : la sauvegarde avant migration est impossible');
 }

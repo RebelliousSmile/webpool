@@ -47,6 +47,31 @@ export function validateRemoteRelativePath(field, value) {
   return value;
 }
 
+// Exécuté par node sur la cible (argument : le fichier env). N'écrit qu'un
+// diagnostic générique, jamais un fragment de l'URL. Les composants doivent être
+// encodés en URL : pg_dump (libpq) refuse un « % » nu.
+export const DATABASE_URL_CHECK = `
+process.loadEnvFile(process.argv[1]);
+const raw = process.env.DATABASE_URL;
+let problem = '';
+if (!raw) problem = 'absente';
+else {
+  let url;
+  try { url = new URL(raw); } catch { problem = 'URL illisible'; }
+  if (url) {
+    if (!/^postgres(ql)?:$/.test(url.protocol)) problem = 'schéma attendu postgres://';
+    else if (url.port === '5433') problem = 'port 5433 (pgBouncer) : utiliser 5432, migrate prend un verrou consultatif de session';
+    else {
+      for (const [name, part] of [['utilisateur', url.username], ['mot de passe', url.password], ['base', url.pathname]]) {
+        try { decodeURIComponent(part); } catch { problem = name + ' mal encodé en URL (% → %25, @ → %40, : → %3A, / → %2F, # → %23, " → %22)'; break; }
+        if (/["\\s]/.test(part)) { problem = name + ' contient un guillemet ou un espace non encodé'; break; }
+      }
+    }
+  }
+}
+process.stdout.write(problem);
+`;
+
 // Posé dans le répertoire livré, en défense si un site venait à servir ~/www :
 // .env y est un lien vers le fichier de secrets.
 export const HTACCESS_DENY = 'Require all denied';
