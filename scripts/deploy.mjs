@@ -192,7 +192,8 @@ await withRemoteLock(ssh, target, async () => {
     `cd ${target.newDir}`,
     `DATABASE_URL="$(${node} -e 'process.loadEnvFile(".env"); process.stdout.write(process.env.DATABASE_URL ?? "")')"`,
     'test -n "$DATABASE_URL"',
-    `pg_dump -Fc -d "$DATABASE_URL" -f "$HOME"/${backup}`,
+    // pg_dump crée le fichier avant d'échouer : pas de sauvegarde vide dans la rotation
+    `{ pg_dump -Fc -d "$DATABASE_URL" -f "$HOME"/${backup} && test -s "$HOME"/${backup} || { rm -f "$HOME"/${backup}; exit 1; }; }`,
   ].join(' && '));
   ssh(`ls -1t ${target.backupDir}/webpool-*.dump | tail -n +6 | xargs -r rm --`);
 
