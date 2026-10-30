@@ -136,8 +136,15 @@ const nodeRemote = assertNodeSupported(ssh(`${node} --version`));
 // jamais : pg_dump, lui, recopie le fragment fautif (donc le mot de passe).
 const urlProblem = ssh(`${node} -e ${shQuote(DATABASE_URL_CHECK)} "$HOME"/${target.envFile}`).trim();
 if (urlProblem) throw new Error(`DATABASE_URL de ~/${target.envFile} : ${urlProblem}`);
-if (ssh('command -v pg_dump >/dev/null && echo present || echo absent').trim() !== 'present') {
-  throw new Error('pg_dump introuvable sur la cible : la sauvegarde avant migration est impossible');
+if (ssh('command -v pg_dump >/dev/null && command -v psql >/dev/null && echo present || echo absent').trim() !== 'present') {
+  throw new Error('pg_dump ou psql introuvable sur la cible : la sauvegarde avant migration est impossible');
+}
+// Connexion réelle (hôte, droits, nom de base) avant le verrou et toute mutation.
+// psql ne recopie pas l'URL dans ses erreurs, contrairement à pg_dump sur une URL mal formée.
+try {
+  ssh(`DATABASE_URL="$(${node} -e 'process.loadEnvFile(process.argv[1]); process.stdout.write(process.env.DATABASE_URL)' "$HOME"/${target.envFile})" && psql "$DATABASE_URL" -XAtqc 'select 1' > /dev/null`);
+} catch (error) {
+  throw new Error(`Connexion à la base impossible avec la DATABASE_URL de ~/${target.envFile} :\n${String(error.stderr ?? '').trim()}`);
 }
 const appExists = ssh(`test -d ${target.appDir} && echo present || echo absent`).trim() === 'present';
 const lastRaw = ssh(`cat ${target.stateDir}/last-deploy.json 2>/dev/null || true`).trim();
