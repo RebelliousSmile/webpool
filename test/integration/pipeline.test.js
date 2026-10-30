@@ -98,6 +98,21 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
       expect(await count('url_source', `url_item_id = ${survivorId}`)).toBe(2);
     });
 
+    it('réingérer une variante doublon trace la requête sur la survivante', async () => {
+      const variant = 'https://www.unsplash.com/s/photos/forest?utm_source=x';
+      await ingestUrls([variant, 'https://unsplash.com/s/photos/forest'], 'forest');
+      await normalizePending({ offline: true });
+      const { rows: dup } = await query(`SELECT id, duplicate_of FROM url_item WHERE status = 'duplicate'`);
+
+      const again = await ingestUrls([variant], 'forêt lora');
+      expect(again).toMatchObject({ inserted: 0, existing: 1 });
+      expect(await count('url_source', `url_item_id = ${dup[0].id}`)).toBe(0);
+      const { rows } = await query('SELECT query FROM url_source WHERE url_item_id = $1 ORDER BY id', [
+        dup[0].duplicate_of,
+      ]);
+      expect(rows.map((r) => r.query)).toEqual(['forest', 'forest', 'forêt lora']);
+    });
+
     it('en ligne : suit le résultat du fetcher, marque les échecs en error sans casser le run', async () => {
       await ingestUrls(['https://a.com/ok', 'https://a.com/gone', 'https://a.com/down']);
       const fetcher = async (url) => {
@@ -234,6 +249,48 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
       await classifyPending();
       const again = await classifyPending();
       expect(again.classified).toBe(0);
+    });
+
+    it('--all reclasse tout le corpus au-delà de limit', async () => {
+      useTaxonomy(tax());
+      await ingestUrls(['https://a.com/lora', 'https://b.com/lora', 'https://c.com/x', 'https://d.com/x', 'https://e.com/x']);
+      await normalizePending({ offline: true });
+      await classifyPending();
+      const res = await classifyPending({ reclassify: true, limit: 2 });
+      expect(res.classified).toBe(5);
+      const { rows } = await query(`SELECT detail FROM processing_run WHERE kind = 'classify' ORDER BY id DESC LIMIT 1`);
+      expect(rows[0].detail).toMatchObject({ classified: 5 });
+      expect(await count('url_item', `classify_run_id = ${res.runId}`)).toBe(5);
+    });
+
+    it('supprime un thème et une facette retirés du JSON, avec leurs affectations', async () => {
+      useTaxonomy(tax());
+      await prepare();
+      await classifyPending();
+      useTaxonomy(tax({ themes: [{ slug: 'photo', label: 'Photo', keywords: ['unsplash'], children: [] }], facets: [] }));
+      await classifyPending({ reclassify: true });
+      const { rows } = await query('SELECT slug FROM theme ORDER BY slug');
+      expect(rows).toEqual([{ slug: 'photo' }]);
+      expect(await count('url_theme')).toBe(1);
+      expect(await count('facet_definition')).toBe(0);
+      expect(await count('url_facet_value')).toBe(0);
+    });
+
+    it('rejette un slug en double sans rien écrire, run en failed', async () => {
+      useTaxonomy(
+        tax({
+          themes: [
+            { slug: 'ia', label: 'IA', keywords: ['lora'], children: [{ slug: 'photo', label: 'X', keywords: [] }] },
+            { slug: 'photo', label: 'Photo', keywords: ['unsplash'], children: [] },
+          ],
+        }),
+      );
+      await prepare();
+      await expect(classifyPending()).rejects.toThrow(/slug de thème en double « photo »/);
+      expect(await count('theme')).toBe(0);
+      expect(await count('facet_definition')).toBe(0);
+      const { rows } = await query(`SELECT status FROM processing_run WHERE kind = 'classify'`);
+      expect(rows).toEqual([{ status: 'failed' }]);
     });
   });
 

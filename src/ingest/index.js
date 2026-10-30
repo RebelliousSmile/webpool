@@ -42,7 +42,12 @@ export async function ingest({ provider, searchQuery, input, limit }) {
           urlItemId = found.rows[0].id;
           inserted += 1;
         } else {
-          const { rows } = await client.query('SELECT id FROM url_item WHERE raw_url = $1', [url]);
+          // Une variante marquée doublon renvoie vers sa survivante : la requête
+          // y est tracée, comme le fait la normalisation pour les sources existantes.
+          const { rows } = await client.query(
+            'SELECT coalesce(duplicate_of, id) AS id FROM url_item WHERE raw_url = $1',
+            [url],
+          );
           urlItemId = rows[0].id;
           existing += 1;
         }

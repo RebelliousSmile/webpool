@@ -90,6 +90,7 @@ pnpm webpool normalize            # suit les redirections, canonise, déduplique
 pnpm webpool normalize --offline  # sans réseau : canonise l'URL brute
 
 pnpm webpool classify             # taxonomie config/taxonomy.json, règles + scores
+pnpm webpool classify --all       # reclasse tout le corpus, par lots de --limit (défaut 100)
 
 # Pools matérialisés
 pnpm webpool pool create --slug lora-foret --label "LoRA forêt" --file mes-criteres.json
@@ -111,6 +112,14 @@ Exemple de définition de pool (lisible et réexécutable) :
   "limit": 50
 }
 ```
+
+### Taxonomie
+
+`config/taxonomy.json` est la source de vérité : à chaque `classify`, thèmes et
+facettes sont synchronisés en base dans une transaction. Un thème ou une facette
+retiré du JSON est supprimé, avec ses affectations ; un slug en double (thème,
+sous-thème ou facette) fait échouer le run sans rien écrire. Après une
+modification, `classify --all` reclasse le corpus existant.
 
 ### Export et réexécutabilité
 

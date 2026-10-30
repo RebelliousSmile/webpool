@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Instruction: Défauts de données : ingest, classify --all, taxonomie

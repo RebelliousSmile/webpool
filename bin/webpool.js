@@ -13,7 +13,7 @@ const HELP = `webpool — pipeline d'URLs : ingestion, normalisation, classifica
 Usage :
   webpool ingest --query "…" [--provider file|brave|searxng|europeana|flickr] [--input results.json] [--limit N]
   webpool normalize [--limit N] [--offline]
-  webpool classify [--limit N] [--all]
+  webpool classify [--limit N] [--all]     (--all : tout le corpus, par lots de N)
   webpool pool create --slug <slug> [--label "…"] --file definition.json
   webpool pool refresh --slug <slug>
   webpool pool show --slug <slug>
