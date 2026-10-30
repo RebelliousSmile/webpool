@@ -5,6 +5,7 @@ import { withRun } from '../run.js';
 import { ingest, providers } from '../ingest/index.js';
 import { isRested, nextState, priority, selectQueries } from './frontier.js';
 import { applyExclusion, excludableDomains, saturatedDomains } from './exclusion.js';
+import { nextPipe, pipeOf, pipeOrder, shouldSwitch, visitPressures } from './pipes.js';
 
 export const QUERY_STATUSES = ['active', 'exhausted', 'paused'];
 
@@ -155,6 +156,83 @@ async function loadSaturated(threshold) {
   return saturatedDomains(rows, threshold);
 }
 
+async function currentPipe() {
+  const { rows } = await query('SELECT slug, entered_at FROM explore_pipe WHERE is_current');
+  return rows[0] ? { slug: rows[0].slug, enteredAt: rows[0].entered_at } : null;
+}
+
+// Entrer dans un tuyau (y compris celui qu'on quitte) remet sa référence à zéro.
+async function enterPipe(slug) {
+  await query('UPDATE explore_pipe SET is_current = false WHERE is_current AND slug <> $1', [slug]);
+  await query(
+    `INSERT INTO explore_pipe (slug, entered_at, is_current) VALUES ($1, now(), true)
+     ON CONFLICT (slug) DO UPDATE SET entered_at = now(), is_current = true`,
+    [slug],
+  );
+}
+
+// Appels réussis des requêtes `ids` depuis `since`, dans l'ordre. Un appel est
+// jugé quand plus aucune de ses URLs ni aucune URL de ses domaines nouveaux
+// n'attend normalize ou classify (les URLs en attente n'ont pas encore de
+// domaine : elles sont retrouvées par url_source). Un domaine est bien noté par
+// sa meilleure URL classée.
+async function pipeRuns(ids, since, goodScore) {
+  if (ids.length === 0) return [];
+  const { rows } = await query(
+    `WITH runs AS (
+       SELECT id, ran_at, ingest_run_id FROM search_query_run
+        WHERE search_query_id = ANY($1) AND error IS NULL AND ran_at >= $2
+     ), doms AS (
+       SELECT runs.id AS run,
+              bool_or(ui.status IN ('pending', 'normalized')) AS waiting,
+              max((ui.relevance_score + ui.quality_score) / 2) FILTER (WHERE ui.status = 'classified') AS best
+         FROM runs
+         JOIN domain_profile dp ON dp.first_run_id = runs.ingest_run_id
+         LEFT JOIN url_item ui ON ui.domain = dp.domain
+        GROUP BY runs.id, dp.domain
+     )
+     SELECT runs.id,
+            EXISTS (SELECT 1 FROM url_source us JOIN url_item ui ON ui.id = us.url_item_id
+                     WHERE us.run_id = runs.ingest_run_id AND ui.status IN ('pending', 'normalized'))
+              OR coalesce(bool_or(d.waiting), false) AS waiting,
+            count(*) FILTER (WHERE d.best >= $3)::int AS good
+       FROM runs LEFT JOIN doms d ON d.run = runs.id
+      GROUP BY runs.id, runs.ran_at, runs.ingest_run_id
+      ORDER BY runs.ran_at, runs.id`,
+    [ids, since, goodScore],
+  );
+  return rows.map((r) => ({ judged: !r.waiting, goodDomains: r.good }));
+}
+
+// Mesure d'un tuyau sur sa dernière visite (appels depuis son entrée).
+async function measurePipe(slug, enteredAt, queries, { goodScore, window }) {
+  const ids = queries.filter((q) => pipeOf(q.tags) === slug).map((q) => q.id);
+  return visitPressures(await pipeRuns(ids, enteredAt, goodScore), window);
+}
+
+// Tuyaux dans leur ordre de rotation : requêtes actives, mesure de la dernière
+// visite, tuyau courant.
+export async function listPipes({ goodScore = config.pipeGoodScore, window = config.pipeWindow } = {}) {
+  const all = await loadQueries();
+  const { rows } = await query('SELECT slug, entered_at, is_current FROM explore_pipe');
+  const state = new Map(rows.map((r) => [r.slug, r]));
+  const out = [];
+  for (const slug of pipeOrder(all)) {
+    const s = state.get(slug);
+    const measure = s ? await measurePipe(slug, s.entered_at, all, { goodScore, window }) : null;
+    out.push({
+      slug,
+      active: all.filter((q) => q.status === 'active' && pipeOf(q.tags) === slug).length,
+      current: Boolean(s?.is_current),
+      enteredAt: s?.entered_at ?? null,
+      reference: measure?.reference ?? null,
+      pressure: measure?.pressure ?? null,
+      judged: measure?.judged ?? 0,
+    });
+  }
+  return out;
+}
+
 // Pour le provider file, la requête est le chemin de l'export ; `{page}` y
 // désigne la page demandée.
 function inputFor(provider, text, page) {
@@ -165,6 +243,9 @@ function inputFor(provider, text, page) {
 // notée sur la requête (la page n'avance pas) sans arrêter le run. Si le provider
 // a un repli (`fallbacks`), la requête y est relancée depuis la page 0 : le passage
 // compte, mais l'état de la requête (page, épuisement) reste celui de son provider.
+// Les requêtes viennent du tuyau courant, quitté au début du passage si sa
+// pression a baissé ; quand il n'a plus de requête active, le reste du budget
+// passe au suivant, sans revenir à un tuyau quitté dans ce passage.
 export async function explore({
   budget,
   provider,
@@ -173,6 +254,9 @@ export async function explore({
   dryRunsLimit = config.exploreDryRuns,
   saturation = config.exploreSaturation,
   maxChars = config.exploreQueryMaxChars,
+  goodScore = config.pipeGoodScore,
+  window = config.pipeWindow,
+  dropRatio = config.pipeDropRatio,
   delayMs = 1000,
   fallbacks = FALLBACKS,
   sleep = sleepMs,
@@ -183,8 +267,12 @@ export async function explore({
 
   return withRun('explore', { budget, provider: provider ?? null }, async (runId) => {
     const woken = await wakeRested({ provider, now: now(), restDays });
-    const chosen = selectQueries(await loadQueries({ status: 'active', provider }), budget);
-    const saturated = chosen.some((q) => excludes(q.provider) || excludes(fallbacks[q.provider]))
+    const all = await loadQueries();
+    const order = pipeOrder(all);
+    let active = all.filter((q) => q.status === 'active' && (provider === undefined || q.provider === provider));
+    const activeIn = (slug) => active.filter((q) => pipeOf(q.tags) === slug);
+    const empty = () => new Set(order.filter((slug) => activeIn(slug).length === 0));
+    const saturated = active.some((q) => excludes(q.provider) || excludes(fallbacks[q.provider]))
       ? await loadSaturated(saturation)
       : [];
     const queries = [];
@@ -201,7 +289,7 @@ export async function explore({
       return { ...res, excluded: exclusion.excluded };
     };
 
-    for (const q of chosen) {
+    const runQuery = async (q) => {
       let page = q.nextPage;
       let dryRuns = q.dryRuns;
       if (EXCLUDING_PROVIDERS.has(q.provider)) {
@@ -268,11 +356,43 @@ export async function explore({
           excluded: exclusionFor(q.provider, q.query, saturated, maxChars).excluded, results: 0, newUrls: 0, newDomains: 0, exhausted: false, error,
         });
       }
+    };
+
+    // Tuyaux quittés ou servis dans ce passage, jamais revisités.
+    const left = new Set();
+    const current = await currentPipe();
+    let pipe = current && order.includes(current.slug) ? current.slug : null;
+    if (pipe === null) {
+      pipe = order.find((slug) => activeIn(slug).length > 0) ?? null;
+      if (pipe !== null) await enterPipe(pipe);
+    } else {
+      const measure = await measurePipe(pipe, current.enteredAt, all, { goodScore, window });
+      if (shouldSwitch({ ...measure, dropRatio, activeQueries: activeIn(pipe).length })) {
+        left.add(pipe);
+        pipe = nextPipe(order, pipe, empty());
+        if (pipe !== null) await enterPipe(pipe);
+      }
+    }
+
+    const pipes = [];
+    let remaining = budget;
+    while (pipe !== null && remaining > 0) {
+      pipes.push(pipe);
+      left.add(pipe);
+      const chosen = selectQueries(activeIn(pipe), remaining);
+      for (const q of chosen) await runQuery(q);
+      remaining -= chosen.length;
+      active = await loadQueries({ status: 'active', provider });
+      // Chaque requête a eu son appel : un tuyau encore actif garde le reste du budget.
+      if (remaining === 0 || activeIn(pipe).length > 0) break;
+      pipe = nextPipe(order, pipe, new Set([...left, ...empty()]));
+      if (pipe !== null) await enterPipe(pipe);
     }
 
     const sum = (key) => queries.reduce((acc, r) => acc + r[key], 0);
     return {
       woken,
+      pipes,
       queries,
       calls: queries.length,
       errors: queries.filter((r) => r.error).length,

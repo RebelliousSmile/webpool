@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { defaultDatabaseUrl, intEnv, loadDotEnv, rootDir } from './env.js';
+import { defaultDatabaseUrl, intEnv, loadDotEnv, ratioEnv, rootDir } from './env.js';
 
 loadDotEnv();
 
@@ -33,6 +33,10 @@ export const config = Object.freeze({
   // exclusion : URLs au-delà desquelles un domaine est saturé, longueur maximale de la requête envoyée
   exploreSaturation: intEnv('WEBPOOL_EXPLORE_SATURATION', 50, 1),
   exploreQueryMaxChars: intEnv('WEBPOOL_EXPLORE_QUERY_MAX_CHARS', 400, 1),
+  // tuyaux : note d'un domaine bien noté, appels par mesure, baisse qui fait passer au suivant
+  pipeGoodScore: ratioEnv('WEBPOOL_PIPE_GOOD_SCORE', 0.5),
+  pipeWindow: intEnv('WEBPOOL_PIPE_WINDOW', 3, 1),
+  pipeDropRatio: ratioEnv('WEBPOOL_PIPE_DROP_RATIO', 0.5),
   // intranet assumé : désactive la garde d'hôte de la normalisation
   allowPrivateHosts: ['1', 'true'].includes(process.env.WEBPOOL_ALLOW_PRIVATE_HOSTS ?? ''),
   userAgent: `webpool/${version} (+https://github.com/RebelliousSmile/webpool)`,

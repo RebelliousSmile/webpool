@@ -10,7 +10,7 @@ import { createPool, refreshPool, listPools, showPool, loadPoolForExport } from 
 import { formatPool } from '../src/pools/export.js';
 import { stats } from '../src/stats.js';
 import { assertUsage, listDomains, qualifyDomain, setExploreExcluded } from '../src/domains/index.js';
-import { addQuery, explore, importQueries, listQueries, parseTags } from '../src/explore/index.js';
+import { addQuery, explore, importQueries, listPipes, listQueries, parseTags } from '../src/explore/index.js';
 import { cycle } from '../src/cycle/index.js';
 
 const HELP = `webpool — pipeline d'URLs : ingestion, normalisation, classification, pools
@@ -31,7 +31,8 @@ Usage :
   webpool query add --provider <p> --query "…" [--tags a,b]
   webpool query import --file requetes.json      (liste de {provider, query, tags})
   webpool query list [--status active|exhausted|paused]
-  webpool explore --budget N [--provider p] [--limit N]   (au plus N appels aux providers)
+  webpool pipe list                        (tuyaux flot:<slug> : requêtes actives, pression et référence de la dernière visite)
+  webpool explore --budget N [--provider p] [--limit N]   (au plus N appels aux providers, ceux du tuyau courant d'abord)
   webpool cycle --budget N [--provider p] [--offline]   (explore, normalize et classify jusqu'à vider la file, refresh des pools)
   webpool stats
   webpool migrate                         (applique les migrations db/migrations manquantes)
@@ -196,6 +197,18 @@ async function main() {
       }
       break;
     }
+    case 'pipe': {
+      if (subcommand !== 'list') throw new Error(`Sous-commande pipe inconnue : ${subcommand ?? '(aucune)'}`);
+      const rows = await listPipes();
+      const fmt = (v) => (v === null ? '—' : v.toFixed(2));
+      for (const p of rows) {
+        console.log(
+          `${p.current ? '*' : ' '} ${p.slug.padEnd(20)} ${String(p.active).padStart(3)} actives  pression ${fmt(p.pressure).padStart(5)}  référence ${fmt(p.reference).padStart(5)}  (${p.judged} appels jugés${p.enteredAt ? ` depuis le ${p.enteredAt.toISOString().slice(0, 16).replace('T', ' ')}` : ''})`,
+        );
+      }
+      if (rows.length === 0) console.log('(aucune requête, donc aucun tuyau)');
+      break;
+    }
     case 'explore': {
       const budget = parsePositive('budget', values.budget);
       if (budget === undefined) throw new Error('explore : --budget requis');
@@ -208,7 +221,7 @@ async function main() {
         );
       }
       console.log(
-        `Explore run #${res.runId} : ${res.calls} appels, ${res.newUrls} URLs nouvelles, ${res.newDomains} domaines nouveaux, ${res.errors} erreurs${res.woken ? `, ${res.woken} requêtes reposées réactivées` : ''}.`,
+        `Explore run #${res.runId}${res.pipes.length ? ` [${res.pipes.join(' → ')}]` : ''} : ${res.calls} appels, ${res.newUrls} URLs nouvelles, ${res.newDomains} domaines nouveaux, ${res.errors} erreurs${res.woken ? `, ${res.woken} requêtes reposées réactivées` : ''}.`,
       );
       break;
     }

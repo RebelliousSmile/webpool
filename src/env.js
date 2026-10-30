@@ -35,3 +35,14 @@ export function intEnv(name, fallback, min = 0, env = process.env) {
   }
   return value;
 }
+
+// Fraction lue dans l'environnement, entre 0 et 1 ; une valeur invalide arrête net.
+export function ratioEnv(name, fallback, env = process.env) {
+  const raw = env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`${name} doit être un nombre entre 0 et 1 (reçu : "${raw}")`);
+  }
+  return value;
+}

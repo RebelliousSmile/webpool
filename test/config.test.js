@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import { config } from '../src/config.js';
-import { defaultDatabaseUrl, intEnv } from '../src/env.js';
+import { defaultDatabaseUrl, intEnv, ratioEnv } from '../src/env.js';
 
 describe('config', () => {
   it('est gelée : une modification lève une erreur', () => {
@@ -14,6 +14,21 @@ describe('config', () => {
   it('annonce la version de package.json dans le User-Agent', () => {
     const { version } = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
     expect(config.userAgent).toContain(`webpool/${version}`);
+  });
+});
+
+describe('ratioEnv', () => {
+  it('rend le défaut, lit une fraction, refuse hors de [0, 1] en nommant la variable', () => {
+    expect(ratioEnv('X', 0.5, {})).toBe(0.5);
+    expect(ratioEnv('X', 0.5, { X: '' })).toBe(0.5);
+    expect(ratioEnv('X', 0.5, { X: '0.25' })).toBe(0.25);
+    expect(ratioEnv('X', 0.5, { X: '1' })).toBe(1);
+    expect(() => ratioEnv('WEBPOOL_PIPE_DROP_RATIO', 0.5, { WEBPOOL_PIPE_DROP_RATIO: '1.5' })).toThrow(/WEBPOOL_PIPE_DROP_RATIO/);
+    expect(() => ratioEnv('X', 0.5, { X: 'abc' })).toThrow(/entre 0 et 1/);
+  });
+
+  it('donne aux tuyaux leurs valeurs par défaut', () => {
+    expect([config.pipeGoodScore, config.pipeWindow, config.pipeDropRatio]).toEqual([0.5, 3, 0.5]);
   });
 });
 

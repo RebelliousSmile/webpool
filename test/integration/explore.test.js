@@ -289,4 +289,90 @@ describe.skipIf(!available)('exploration sur PostgreSQL', () => {
     const known = (await query("SELECT first_run_id, first_query FROM domain_profile WHERE domain = 'known.com'")).rows[0];
     expect(known).toEqual({ first_run_id: null, first_query: 'avant' });
   });
+
+  describe('tuyaux', () => {
+    // `n` URLs sur `n` domaines distincts.
+    const doms = (prefix, n) => Array.from({ length: n }, (_, i) => `https://${prefix}${i}.com/x`);
+    const tagged = (slug, name, perPage) =>
+      ex.addQuery({ provider: 'file', query: pages(name, perPage), tags: slug ? [`flot:${slug}`] : [] });
+    // Simule normalize puis classify : chaque URL en attente reçoit son domaine et la note `score`.
+    const judge = (score) =>
+      query(
+        `UPDATE url_item SET status = 'classified', canonical_url = raw_url,
+                domain = substring(raw_url from '://([^/]+)'), relevance_score = $1, quality_score = $1
+          WHERE status IN ('pending', 'normalized')`,
+        [score],
+      );
+    const current = async () => (await query('SELECT slug FROM explore_pipe WHERE is_current')).rows.map((r) => r.slug);
+
+    it('suit le tuyau courant, bascule quand la pression tombe à la moitié, puis revient au premier', async () => {
+      for (const i of [0, 1, 2]) await tagged('a', `a${i}`, [doms(`a${i}p0-`, 4), doms(`a${i}p1-`, 1), doms(`a${i}p2-`, 1)]);
+      for (const i of [0, 1, 2]) await tagged('b', `b${i}`, [doms(`b${i}-`, 1)]);
+      for (const i of [0, 1, 2]) await tagged(null, `d${i}`, [doms(`d${i}-`, 1)]);
+
+      expect(await explore({ budget: 3 })).toMatchObject({ pipes: ['a'], calls: 3, newDomains: 12 });
+      await judge(0.9);
+      // Référence 4 et pression 4 : on reste.
+      expect((await explore({ budget: 3 })).pipes).toEqual(['a']);
+      await judge(0.9);
+      // Pression 1 ≤ 0,5 × 4 : bascule.
+      expect((await explore({ budget: 3 })).pipes).toEqual(['b']);
+      const listed = await ex.listPipes();
+      expect(listed.map((x) => [x.slug, x.active, x.current, x.reference, x.pressure, x.judged])).toEqual([
+        ['a', 3, false, 4, 1, 6],
+        ['b', 3, true, null, null, 0],
+        ['defaut', 3, false, null, null, 0],
+      ]);
+      // b stérile (référence et pression nulles) : quitté pour defaut, puis defaut pour a.
+      await judge(0.1);
+      expect((await explore({ budget: 3 })).pipes).toEqual(['defaut']);
+      await judge(0.1);
+      expect((await explore({ budget: 3 })).pipes).toEqual(['a']);
+      // Nouvelle visite : la référence de a repart de zéro.
+      expect((await ex.listPipes())[0]).toMatchObject({ slug: 'a', current: true, reference: null, judged: 0 });
+    });
+
+    it('tuyau vidé en cours de passage : le reste du budget passe au suivant', async () => {
+      await query("INSERT INTO url_item (raw_url) VALUES ('https://seen.com/1')");
+      const a1 = await tagged('a', 'v1', [['https://seen.com/1']]);
+      const a2 = await tagged('a', 'v2', [['https://seen.com/1']]);
+      const b = [];
+      for (const i of [0, 1, 2]) b.push(await tagged('b', `w${i}`, [doms(`w${i}-`, 1)]));
+
+      const res = await explore({ budget: 5, dryRunsLimit: 1 });
+      expect(res).toMatchObject({ pipes: ['a', 'b'], calls: 5, errors: 0 });
+      expect(res.queries.map((q) => q.id)).toEqual([a1.id, a2.id, ...b.map((q) => q.id)]);
+      expect(await current()).toEqual(['b']);
+    });
+
+    it('appels pas encore jugés : aucune bascule ; jugés stériles : bascule', async () => {
+      for (const i of [0, 1, 2]) await tagged('a', `j${i}`, [doms(`j${i}p0-`, 1), doms(`j${i}p1-`, 1), doms(`j${i}p2-`, 1)]);
+      await tagged('b', 'k', [doms('k-', 1)]);
+
+      expect((await explore({ budget: 3 })).pipes).toEqual(['a']);
+      expect((await explore({ budget: 3 })).pipes).toEqual(['a']);
+      await judge(0);
+      expect((await explore({ budget: 3 })).pipes).toEqual(['b']);
+    });
+
+    it('un tuyau quitté dans le passage n’est pas relancé, même s’il a des requêtes actives', async () => {
+      await query("INSERT INTO url_item (raw_url) VALUES ('https://seen.com/1')");
+      for (const i of [0, 1, 2]) await tagged('a', `r${i}`, [doms(`r${i}p0-`, 1), doms(`r${i}p1-`, 1)]);
+      await tagged('b', 'seen', [['https://seen.com/1']]);
+
+      await explore({ budget: 3 });
+      await judge(0);
+      const res = await explore({ budget: 5, dryRunsLimit: 1 });
+      expect(res).toMatchObject({ pipes: ['b'], calls: 1 });
+      expect(await current()).toEqual(['b']);
+    });
+
+    it('aucun tuyau actif : aucun appel, aucune erreur', async () => {
+      await tagged('a', 'x', [doms('x-', 1)]);
+      await tagged(null, 'y', [doms('y-', 1)]);
+      await query("UPDATE search_query SET status = 'exhausted', exhausted_at = now()");
+      expect(await explore({ budget: 5 })).toMatchObject({ pipes: [], calls: 0, errors: 0 });
+      expect(await current()).toEqual([]);
+    });
+  });
 });
