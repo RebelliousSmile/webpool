@@ -1,6 +1,6 @@
 ---
 objective: "Les 33 constats de l'audit du 2026-10-30 sont corrigés ou explicitement écartés, et les deux suites de tests tournent en CI sans skip silencieux."
-status: in-progress
+status: implemented
 ---
 
 # Plan: Correction des constats de l'audit webpool
