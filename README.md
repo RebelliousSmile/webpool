@@ -315,6 +315,61 @@ Limites :
 - Les requêtes s'écrivent à la main. Les générer à partir du corpus est prévu
   dans une phase ultérieure.
 
+## API HTTP (lecture seule)
+
+`webpool serve` expose le corpus et les pools en JSON, pour l'interface
+[datapool](https://github.com/RebelliousSmile/datapool) ou pour des clients. Le
+contrat complet est dans [`openapi.json`](openapi.json), servi aussi à
+`/api/v1/openapi.json`.
+
+```bash
+pnpm webpool client add --name moi --scope admin
+# Client "moi" (admin) créé. Jeton, affiché une seule fois :
+# wp_…
+pnpm webpool serve --port 3000
+curl -H "Authorization: Bearer wp_…" http://127.0.0.1:3000/api/v1/admin/stats
+```
+
+**Clients.** Chaque client a sa clé ; la base n'en garde que l'empreinte SHA-256
+(`api_client`). Un client `admin` voit tout. Un client `read` ne voit que les pools
+qui lui sont accordés, sans leur définition ni leurs scores ; un pool non accordé
+répond 404.
+
+```bash
+pnpm webpool client add --name client-a            # scope read par défaut
+pnpm webpool client grant --name client-a --slug lora-foret
+pnpm webpool client list
+pnpm webpool client revoke --name client-a
+```
+
+| Route (`/api/v1`) | Accès | Contenu |
+|---|---|---|
+| `/health`, `/openapi.json` | public | état de la base, contrat |
+| `/me` | read | client authentifié |
+| `/pools`, `/pools/{slug}` | read | pools visibles ; volumes, domaines principaux, répartition de l'usage commercial |
+| `/pools/{slug}/items` | read | URLs rangées, paginées (`limit` ≤ 500, `offset`) |
+| `/admin/stats` | admin | volumes pour un tableau de bord |
+| `/admin/pools/{slug}/export?format=json\|csv\|md` | admin | export de `pool export` |
+| `/admin/urls`, `/admin/urls/{id}` | admin | corpus filtré (`status`, `theme`, `facet=slug:valeur`, `domain`, `q`, `order`) ; fiche : sources, thèmes, facettes, pools |
+| `/admin/themes`, `/admin/facets` | admin | taxonomie en arbre, valeurs de facettes, avec volumes |
+| `/admin/domains` | admin | registre (`to_qualify`, `excluded`, `usage`, `q`) |
+| `/admin/queries`, `/admin/runs` | admin | frontière d'exploration, historique du pipeline |
+
+Les erreurs sont en JSON (`{"error": {"code", "message"}}`) : 400 paramètre
+invalide, 401 jeton absent ou révoqué, 403 route admin, 404, 405. Une erreur
+interne répond 500 sans détail ; le détail part dans le journal du serveur, qui
+trace une ligne par requête (méthode, chemin, statut, durée, client).
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `WEBPOOL_API_PORT` | `PORT`, sinon 3000 | port d'écoute (`--port`) |
+| `WEBPOOL_API_HOST` | `IP`, sinon 127.0.0.1 | adresse d'écoute (`--host`) |
+| `WEBPOOL_API_CORS_ORIGINS` | aucune | origines autorisées, séparées par des virgules (ex. l'URL de datapool) |
+
+L'API ne fait que lire : pour aller plus loin, la base peut être ouverte au serveur
+par un rôle PostgreSQL limité à `SELECT`. Elle n'est pas encore déployée : le
+déploiement actuel interdit tout accès web (`.htaccess`).
+
 ## Déploiement (alwaysdata)
 
 webpool est un CLI sans serveur : le déployer, c'est l'installer sur le compte, le
@@ -393,7 +448,7 @@ sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
 
 | Chemin | Rôle |
 |---|---|
-| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) ; `002` à `004` : domain_profile, search_query, search_query_run, exclusion_hash |
+| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) ; `002` à `005` : domain_profile, search_query, search_query_run, exclusion_hash, api_client |
 | `src/ingest/` | Providers SERP (`file`, `brave`, `searxng`, `europeana`, `flickr`, `openrouter`) + insertion tracée |
 | `src/normalize/` | Canonisation stricte (tracking, redirections, dédup domaine+canonique), fetch poli |
 | `src/classify/` | Classifieur par règles piloté par `config/taxonomy.json` |
@@ -402,6 +457,8 @@ sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
 | `src/domains/` | Registre des domaines et facette `usage-commercial` |
 | `src/cycle/` | `cycle` : explore, normalize, classify, refresh des pools |
 | `src/pools/` | Définition JSON → SQL paramétré → matérialisation rangée → export |
+| `src/api/` | API HTTP en lecture seule (`serve`), clients et jetons ; routeur, paramètres et serveur testables sans base |
+| `openapi.json` | Contrat de l'API |
 | `bin/webpool.js` | CLI |
 | `scripts/deploy.mjs` | Déploiement alwaysdata (`pnpm deploy:prod`), fonctions pures dans `deploy-lib.mjs` |
 | `deploy/` | Contrat de déploiement, exemple de cible (`targets.json` ignoré par git) |
@@ -413,7 +470,7 @@ sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
 ```bash
 pnpm test               # fonctions pures, aucune base requise
 pnpm db:up
-pnpm test:integration   # couches DB (ingest, normalize, classify, pools, explore, cycle)
+pnpm test:integration   # couches DB (ingest, normalize, classify, pools, explore, cycle, API)
 ```
 
 La suite d'intégration utilise le PostgreSQL docker local dans un schéma jetable créé

@@ -75,7 +75,8 @@ export async function resetData(query) {
   }
   await query(
     `TRUNCATE pool_item, pool, url_facet_value, facet_definition, url_theme, theme,
-              url_source, url_item, processing_run, domain_profile, search_query_run, search_query RESTART IDENTITY CASCADE`,
+              url_source, url_item, processing_run, domain_profile, search_query_run, search_query,
+              api_client_pool, api_client RESTART IDENTITY CASCADE`,
   );
 }
 
