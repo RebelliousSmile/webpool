@@ -14,6 +14,9 @@ function harness(responses, opts = {}) {
     retries: 2,
     backoffMs: 100,
     maxBodyBytes: 1000,
+    maxRedirects: 5,
+    allowPrivateHosts: false,
+    lookup: async () => [{ address: '93.184.216.34', family: 4 }],
     now: () => t,
     sleep: async (ms) => {
       sleeps.push(ms);
@@ -97,6 +100,80 @@ describe('fetcher — corps limité', () => {
   it('ignore le corps non-HTML', async () => {
     const { fetcher } = harness([new Response('{"a":1}', { headers: { 'content-type': 'application/json' } })]);
     expect((await fetcher('https://a.com/x.json')).html).toBe('');
+  });
+});
+
+const redirect = (location, status = 301) => new Response(null, { status, headers: { location } });
+
+describe('fetcher — redirections manuelles', () => {
+  it('suit deux sauts, renvoie la dernière URL, un créneau de throttle par saut', async () => {
+    const { fetcher, calls, sleeps } = harness([
+      redirect('/b'),
+      redirect('https://a.com/c', 302),
+      html('<title>fin</title>'),
+    ]);
+    const res = await fetcher('https://a.com/a');
+    expect(res).toMatchObject({ finalUrl: 'https://a.com/c', httpStatus: 200 });
+    expect(calls.map((c) => c.url)).toEqual(['https://a.com/a', 'https://a.com/b', 'https://a.com/c']);
+    // même hôte : chaque saut attend perHostDelayMs après le précédent
+    expect(sleeps).toEqual([1000, 1000]);
+    expect(calls[2].at - calls[1].at).toBe(1000);
+  });
+
+  it('demande redirect manual à fetchImpl', async () => {
+    let init;
+    const { fetcher } = harness([], { fetchImpl: async (_url, i) => ((init = i), html('ok')) });
+    await fetcher('https://a.com/');
+    expect(init.redirect).toBe('manual');
+  });
+
+  it('traite un 3xx sans location comme la réponse finale', async () => {
+    const { fetcher, calls } = harness([new Response(null, { status: 302 })]);
+    expect((await fetcher('https://a.com/')).httpStatus).toBe(302);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('refuse une redirection vers un hôte privé, au saut', async () => {
+    const { fetcher, calls } = harness([redirect('http://10.0.0.5/')]);
+    await expect(fetcher('https://a.com/')).rejects.toThrow(/hôte refusé/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('refuse au-delà de maxRedirects, sans retry', async () => {
+    const loop = Array.from({ length: 10 }, (_, i) => redirect(`/r${i}`));
+    const { fetcher, calls } = harness(loop, { maxRedirects: 2 });
+    await expect(fetcher('https://a.com/')).rejects.toThrow(/trop de redirections/);
+    expect(calls).toHaveLength(3);
+  });
+
+  it('rejoue la chaîne entière sur erreur transitoire', async () => {
+    const { fetcher, calls } = harness([redirect('/b'), html('', 503), redirect('/b'), html('ok')]);
+    const res = await fetcher('https://a.com/a');
+    expect(res.httpStatus).toBe(200);
+    expect(calls.map((c) => c.url)).toEqual(['https://a.com/a', 'https://a.com/b', 'https://a.com/a', 'https://a.com/b']);
+  });
+});
+
+describe('fetcher — garde d’hôte', () => {
+  it.each(['http://127.0.0.1/', 'http://169.254.169.254/latest/meta-data', 'http://[::1]/', 'http://[::ffff:127.0.0.1]/'])(
+    'refuse %s sans appeler fetchImpl',
+    async (url) => {
+      const { fetcher, calls } = harness([html('ok')]);
+      await expect(fetcher(url)).rejects.toThrow(/hôte refusé/);
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  it('refuse un nom qui résout vers une adresse privée', async () => {
+    const { fetcher, calls } = harness([html('ok')], { lookup: async () => [{ address: '192.168.1.10', family: 4 }] });
+    await expect(fetcher('https://intranet.example/')).rejects.toThrow(/hôte refusé/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('laisse passer un hôte privé si allowPrivateHosts', async () => {
+    const { fetcher, calls } = harness([html('ok')], { allowPrivateHosts: true });
+    expect((await fetcher('http://127.0.0.1/')).httpStatus).toBe(200);
+    expect(calls).toHaveLength(1);
   });
 });
 

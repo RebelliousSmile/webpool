@@ -128,6 +128,35 @@ describe.skipIf(!available)('pipeline sur PostgreSQL', () => {
       const { rows: runs } = await query(`SELECT status FROM processing_run WHERE kind = 'normalize'`);
       expect(runs).toEqual([{ status: 'done' }]);
     });
+
+    it("ignore un canonical d'un autre domaine : pas de fusion", async () => {
+      await ingestUrls(['https://a.example/page', 'https://b.example/cible']);
+      const fetcher = async (url) => ({
+        finalUrl: url,
+        httpStatus: 200,
+        html: url.includes('a.example')
+          ? '<head><link rel="canonical" href="https://b.example/cible"></head>'
+          : '<head><title>B</title></head>',
+      });
+      const res = await normalizePending({ fetcher });
+      expect(res).toMatchObject({ normalized: 2, duplicate: 0, error: 0 });
+      const { rows } = await query('SELECT canonical_url FROM url_item ORDER BY id');
+      expect(rows.map((r) => r.canonical_url)).toEqual(['https://a.example/page', 'https://b.example/cible']);
+    });
+
+    it('refuse un hôte non public sans émettre de requête', async () => {
+      await ingestUrls(['http://127.0.0.1/admin', 'http://169.254.169.254/latest', 'http://[::1]/']);
+      let calls = 0;
+      const fetchImpl = async () => {
+        calls += 1;
+        return new Response('<head></head>', { headers: { 'content-type': 'text/html' } });
+      };
+      const res = await normalizePending({ fetchImpl });
+      expect(res).toMatchObject({ normalized: 0, error: 3 });
+      expect(calls).toBe(0);
+      const { rows } = await query('SELECT status, error FROM url_item');
+      for (const row of rows) expect(row).toMatchObject({ status: 'error', error: expect.stringMatching(/hôte refusé/) });
+    });
   });
 
   describe('classify', () => {

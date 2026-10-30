@@ -1,15 +1,24 @@
 // US-10 — récupération de pages polie : délai par hôte, retry borné avec
 // backoff, lecture du corps limitée, concurrence bornée entre hôtes.
-// `fetchImpl`, `sleep` et `now` sont injectables pour les tests.
+// `fetchImpl`, `lookup`, `sleep` et `now` sont injectables pour les tests.
 import { config } from '../config.js';
+import { assertPublicHost } from './hostGuard.js';
 
 const sleepReal = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const MAX_RETRY_AFTER_MS = 10_000;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 export class HttpError extends Error {
   constructor(status) {
     super(`HTTP ${status}`);
     this.httpStatus = status;
+  }
+}
+
+export class TooManyRedirectsError extends Error {
+  constructor(url, max) {
+    super(`trop de redirections : plus de ${max} depuis ${url}`);
+    this.retryable = false;
   }
 }
 
@@ -52,7 +61,10 @@ export function createFetcher({
   backoffMs = config.fetchBackoffMs,
   maxBodyBytes = config.maxBodyBytes,
   timeoutMs = config.fetchTimeoutMs,
+  maxRedirects = config.maxRedirects,
+  allowPrivateHosts = config.allowPrivateHosts,
   fetchImpl = fetch,
+  lookup,
   sleep = sleepReal,
   now = Date.now,
 } = {}) {
@@ -67,20 +79,38 @@ export function createFetcher({
     if (wait > 0) await sleep(wait);
   }
 
-  return async function fetchPage(rawUrl) {
-    const host = new URL(rawUrl).host;
-    for (let attempt = 0; ; attempt += 1) {
+  // Redirections suivies à la main : chaque saut passe la garde d'hôte et
+  // réserve son créneau de politesse. Renvoie la dernière réponse et son URL.
+  async function fetchChain(rawUrl) {
+    let url = rawUrl;
+    for (let hops = 0; ; hops += 1) {
+      const { hostname, host } = new URL(url);
+      await assertPublicHost(hostname, { lookup, allowPrivate: allowPrivateHosts });
       await throttle(host);
+      const res = await fetchImpl(url, {
+        redirect: 'manual',
+        headers: { 'User-Agent': config.userAgent, Accept: 'text/html,*/*;q=0.8' },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const location = REDIRECT_STATUSES.has(res.status) ? res.headers.get('location') : null;
+      if (!location) return { res, url };
+      await res.body?.cancel?.().catch(() => {});
+      if (hops >= maxRedirects) throw new TooManyRedirectsError(rawUrl, maxRedirects);
+      url = new URL(location, url).href;
+    }
+  }
+
+  // Les retries rejouent la chaîne entière ; garde et limite de redirections
+  // ne sont pas rejouables.
+  return async function fetchPage(rawUrl) {
+    for (let attempt = 0; ; attempt += 1) {
       const last = attempt >= retries;
       let res;
+      let url;
       try {
-        res = await fetchImpl(rawUrl, {
-          redirect: 'follow',
-          headers: { 'User-Agent': config.userAgent, Accept: 'text/html,*/*;q=0.8' },
-          signal: AbortSignal.timeout(timeoutMs),
-        });
+        ({ res, url } = await fetchChain(rawUrl));
       } catch (err) {
-        if (last) throw err;
+        if (last || err.retryable === false) throw err;
         await sleep(backoffMs * 2 ** attempt);
         continue;
       }
@@ -94,7 +124,7 @@ export function createFetcher({
       const isHtml = contentType.includes('text/html');
       const html = isHtml ? await readHead(res, maxBodyBytes) : '';
       if (!isHtml) await res.body?.cancel?.().catch(() => {});
-      return { finalUrl: res.url, httpStatus: res.status, html };
+      return { finalUrl: url, httpStatus: res.status, html };
     }
   };
 }

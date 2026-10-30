@@ -131,6 +131,19 @@ borne la concurrence entre hôtes. Réglages dans `.env` : `WEBPOOL_HOST_DELAY_M
 `WEBPOOL_CONCURRENCY`, `WEBPOOL_FETCH_TIMEOUT_MS`. Une réponse 4xx/5xx place l'URL
 en statut `error` (avec son code HTTP) sans interrompre le run.
 
+Les URL visitées viennent de l'extérieur : avant chaque requête, l'hôte est résolu
+et refusé (`error` : « hôte refusé ») si une de ses adresses n'est pas publique —
+loopback, plages privées, link-local et métadonnées cloud (`169.254.169.254`),
+CGNAT, IPv6 locales. Les redirections sont suivies une à une : chaque saut repasse
+ce contrôle et le délai par hôte, dans la limite de `WEBPOOL_MAX_REDIRECTS`
+(défaut 5, au-delà : « trop de redirections »). `WEBPOOL_ALLOW_PRIVATE_HOSTS=1`
+désactive la garde, pour un usage intranet assumé. Les appels aux providers SERP
+(dont un SearXNG local) ne sont pas filtrés.
+
+Le `<link rel="canonical">` d'une page n'est retenu que s'il désigne le même
+domaine que l'URL finale (hôte exact, `www.` ignoré) ; sinon l'URL finale sert
+d'URL canonique, sans fusion avec l'autre site.
+
 ### Providers SERP
 
 | Provider | Clé / config | Remarque |

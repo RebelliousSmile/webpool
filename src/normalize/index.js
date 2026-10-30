@@ -4,6 +4,20 @@ import { startRun, finishRun } from '../run.js';
 import { createFetcher, mapLimit, HttpError } from './fetcher.js';
 import { canonicalizeUrl, domainOf, extractCanonicalLink, extractTitle } from './normalizer.js';
 
+// Une page ne peut revendiquer que l'URL de son propre domaine (hôte exact,
+// `www.` retiré) : sinon elle provoquerait la fusion d'URL d'un autre site.
+function sameDomainCanonical(declared, finalUrl) {
+  if (!declared) return null;
+  try {
+    return domainOf(canonicalizeUrl(declared)) === domainOf(canonicalizeUrl(finalUrl)) ? declared : null;
+  } catch {
+    return null; // schéma non http(s) : canonical ignoré
+  }
+}
+
+// IP publique fixe : un `fetchImpl` injecté (tests) ne doit déclencher aucune résolution DNS.
+const fakePublicLookup = async () => [{ address: '93.184.216.34', family: 4 }];
+
 async function normalizeOne(item, runId, page) {
   let finalUrl = item.raw_url;
   let httpStatus = null;
@@ -11,13 +25,13 @@ async function normalizeOne(item, runId, page) {
   let declaredCanonical = null;
 
   if (page) {
-    // US-07 : une réponse 4xx/5xx n'est pas une page exploitable.
-    if (page.httpStatus >= 400) throw new HttpError(page.httpStatus);
+    // US-07 : une réponse 3xx (sans location), 4xx ou 5xx n'est pas une page exploitable.
+    if (page.httpStatus >= 300) throw new HttpError(page.httpStatus);
     finalUrl = page.finalUrl || item.raw_url;
     httpStatus = page.httpStatus;
     if (page.html) {
       title = extractTitle(page.html) ?? title;
-      declaredCanonical = extractCanonicalLink(page.html, finalUrl);
+      declaredCanonical = sameDomainCanonical(extractCanonicalLink(page.html, finalUrl), finalUrl);
     }
   }
 
@@ -69,7 +83,9 @@ export async function normalizePending({
   offline = false,
   concurrency = config.concurrency,
   fetchImpl,
-  fetcher = createFetcher(fetchImpl ? { fetchImpl, perHostDelayMs: 0, backoffMs: 0 } : {}),
+  fetcher = createFetcher(
+    fetchImpl ? { fetchImpl, lookup: fakePublicLookup, perHostDelayMs: 0, backoffMs: 0 } : {},
+  ),
 } = {}) {
   const runId = await startRun('normalize', { limit, offline, concurrency });
   const counts = { normalized: 0, duplicate: 0, error: 0 };
