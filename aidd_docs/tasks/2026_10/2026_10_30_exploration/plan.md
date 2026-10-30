@@ -1,6 +1,6 @@
 ---
 objective: "Une commande planifiable fait découvrir à webpool, run après run, des domaines qu'il ne connaissait pas, pour tout type de ressource, et le droit d'usage commercial devient une facette qualifiée une fois par domaine."
-status: in-progress
+status: implemented
 ---
 
 <!-- Fill or omit these sections; never add, rename, or reorder one. -->
@@ -41,3 +41,5 @@ status: in-progress
 | Le registre (`domain_profile`) a le dernier mot sur les motifs de la taxonomie, et une qualification réécrit immédiatement la facette des URLs du domaine. | Une source rare n'est reconnue par aucun motif ; la qualifier une fois doit suffire, sans reclassifier tout le corpus. |
 | Le rendement d'une requête se mesure en domaines nouveaux, pas en URLs nouvelles. | Une requête qui ramène 20 nouvelles pages d'Unsplash n'aide pas à trouver des sources rares. |
 | Une requête épuisée n'est pas supprimée : elle redevient éligible, depuis la page 0, après un délai de repos configurable. | Le web change ; le registre de requêtes est l'actif qui s'accumule. |
+| Plan clos le 2026-10-30 avec une réserve sur le critère 3 de la phase 6 : `cycle --budget 5` lancé à la main sur le serveur a réussi (5 appels OpenRouter, 87 URLs et 42 domaines nouveaux, 0 erreur, 10 pools rafraîchis), mais aucun passage déclenché par alwaysdata (tâche #37068, `0 4 * * 1`) n'a encore eu lieu ; le journal `~/admin/logs/jobs/2026/37068-2026-11-02.log` reste à lire. | La commande planifiée est celle qui a été validée ; seul le déclenchement par alwaysdata reste à constater. |
+| Suite hors plan : les requêtes jamais lancées passent dans l'ordre d'import (`selectQueries`, départage par id), donc les 7 premiers passages sont tous japonais et les pools créatures, psychologie et Saint-Pétersbourg restent vides ; à environ 20 appels par semaine, environ trois semaines pour finir les requêtes de départ. | Sujet de conception distinct, à traiter dans un brainstorm. |
