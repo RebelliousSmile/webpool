@@ -10,6 +10,7 @@ import { createPool, refreshPool, listPools, showPool, loadPoolForExport } from 
 import { formatPool } from '../src/pools/export.js';
 import { stats } from '../src/stats.js';
 import { assertUsage, listDomains, qualifyDomain } from '../src/domains/index.js';
+import { addQuery, explore, importQueries, listQueries, parseTags } from '../src/explore/index.js';
 
 const HELP = `webpool — pipeline d'URLs : ingestion, normalisation, classification, pools
 
@@ -24,13 +25,17 @@ Usage :
   webpool pool list
   webpool domain list [--to-qualify] [--limit N]
   webpool domain set --domain <domaine> --usage libre|sous-conditions|payant|non-commercial [--note "…"]
+  webpool query add --provider <p> --query "…" [--tags a,b]
+  webpool query import --file requetes.json      (liste de {provider, query, tags})
+  webpool query list [--status active|exhausted|paused]
+  webpool explore --budget N [--provider p] [--limit N]   (au plus N appels aux providers)
   webpool stats
   webpool migrate                         (applique les migrations db/migrations manquantes)
 `;
 
 const OPTIONS = {
   query: { type: 'string' },
-  provider: { type: 'string', default: 'file' },
+  provider: { type: 'string' },
   input: { type: 'string' },
   limit: { type: 'string' },
   offline: { type: 'boolean', default: false },
@@ -45,14 +50,17 @@ const OPTIONS = {
   usage: { type: 'string' },
   note: { type: 'string' },
   'to-qualify': { type: 'boolean', default: false },
+  tags: { type: 'string' },
+  status: { type: 'string' },
+  budget: { type: 'string' },
   help: { type: 'boolean', short: 'h', default: false },
 };
 
 // Valide avant toute connexion à la base.
-function parseLimit(raw) {
+function parsePositive(name, raw) {
   if (raw === undefined) return undefined;
   const n = Number(raw);
-  if (!/^\d+$/.test(raw.trim()) || n <= 0) throw new Error(`--limit doit être un entier > 0 (reçu : "${raw}")`);
+  if (!/^\d+$/.test(raw.trim()) || n <= 0) throw new Error(`--${name} doit être un entier > 0 (reçu : "${raw}")`);
   return n;
 }
 
@@ -67,12 +75,12 @@ async function main() {
     console.log(HELP);
     return;
   }
-  const limit = parseLimit(values.limit);
+  const limit = parsePositive('limit', values.limit);
 
   switch (command) {
     case 'ingest': {
       const res = await ingest({
-        provider: values.provider,
+        provider: values.provider ?? 'file',
         searchQuery: values.query,
         input: values.input,
         limit,
@@ -151,6 +159,45 @@ async function main() {
       } else {
         throw new Error(`Sous-commande domain inconnue : ${subcommand ?? '(aucune)'}`);
       }
+      break;
+    }
+    case 'query': {
+      if (subcommand === 'add') {
+        if (!values.provider || !values.query) throw new Error('query add : --provider et --query requis');
+        const res = await addQuery({ provider: values.provider, query: values.query, tags: parseTags(values.tags) });
+        console.log(`Requête #${res.id} ajoutée (${res.provider}) : « ${res.query} »${res.tags.length ? ` [${res.tags.join(', ')}]` : ''}.`);
+      } else if (subcommand === 'import') {
+        if (!values.file) throw new Error('query import : --file requis');
+        const res = await importQueries(values.file);
+        console.log(`Requêtes importées : ${res.added} ajoutées, ${res.skipped} déjà connues.`);
+      } else if (subcommand === 'list') {
+        const rows = await listQueries({ status: values.status });
+        for (const q of rows) {
+          const prio = q.priority === Infinity ? 'neuve' : q.priority.toFixed(2);
+          console.log(
+            `#${String(q.id).padEnd(4)} ${q.status.padEnd(9)} ${q.provider.padEnd(9)} p.${q.nextPage}  ${String(q.runs).padStart(3)} passages  ${String(q.newDomains).padStart(4)} domaines  prio ${prio}  ${q.query}${q.tags.length ? `  [${q.tags.join(', ')}]` : ''}`,
+          );
+        }
+        if (rows.length === 0) console.log('(aucune requête)');
+      } else {
+        throw new Error(`Sous-commande query inconnue : ${subcommand ?? '(aucune)'}`);
+      }
+      break;
+    }
+    case 'explore': {
+      const budget = parsePositive('budget', values.budget);
+      if (budget === undefined) throw new Error('explore : --budget requis');
+      const res = await explore({ budget, provider: values.provider, limit });
+      for (const q of res.queries) {
+        console.log(
+          q.error
+            ? `  #${q.id} ${q.provider} p.${q.page} : erreur — ${q.error}`
+            : `  #${q.id} ${q.provider} p.${q.page} : ${q.results} résultats, ${q.newUrls} URLs nouvelles, ${q.newDomains} domaines nouveaux${q.exhausted ? ' (épuisée)' : ''}  « ${q.query} »`,
+        );
+      }
+      console.log(
+        `Explore run #${res.runId} : ${res.calls} appels, ${res.newUrls} URLs nouvelles, ${res.newDomains} domaines nouveaux, ${res.errors} erreurs${res.woken ? `, ${res.woken} requêtes reposées réactivées` : ''}.`,
+      );
       break;
     }
     case 'migrate': {

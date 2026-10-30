@@ -89,6 +89,28 @@ describe('providers SERP — contrat {url, rank, title}', () => {
     expect(res).toHaveLength(2);
   });
 
+  it('page : sans page, aucun paramètre de pagination ; sinon chaque provider traduit la page 0-based', () => {
+    const params = (url) => Object.fromEntries(url.searchParams);
+    expect(params(brave.buildUrl('q', 20))).not.toHaveProperty('offset');
+    expect(params(brave.buildUrl('q', 20, 0))).not.toHaveProperty('offset');
+    expect(params(brave.buildUrl('q', 20, 3)).offset).toBe('3');
+    expect(params(searxng.buildUrl('http://s', 'q'))).not.toHaveProperty('pageno');
+    expect(params(searxng.buildUrl('http://s', 'q', 2)).pageno).toBe('3');
+    expect(params(flickr.buildUrl('q', 'K', 20))).not.toHaveProperty('page');
+    expect(params(flickr.buildUrl('q', 'K', 20, 1)).page).toBe('2');
+    expect(params(europeana.buildUrl('q', 'K', 20))).not.toHaveProperty('start');
+    expect(params(europeana.buildUrl('q', 'K', 20, 2)).start).toBe('41');
+  });
+
+  it('search : transmet la page au provider', async () => {
+    let seen;
+    await brave.search(
+      { query: 'q', page: 4 },
+      { apiKey: 'BK', fetchImpl: async (url) => ((seen = new URL(url)), jsonResponse(fixture('brave-response.json'))) },
+    );
+    expect(seen.searchParams.get('offset')).toBe('4');
+  });
+
   it('search : clé ou URL absente → message explicite, erreur HTTP → message lisible', async () => {
     await expect(europeana.search({ query: 'q' }, { apiKey: '' })).rejects.toThrow(/EUROPEANA_API_KEY manquante/);
     await expect(searxng.search({ query: 'q' }, { baseUrl: '' })).rejects.toThrow(/SEARXNG_URL manquante/);

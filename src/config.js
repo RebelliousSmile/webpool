@@ -23,6 +23,9 @@ export const config = Object.freeze({
   concurrency: intEnv('WEBPOOL_CONCURRENCY', 4, 1),
   normalizeChunk: intEnv('WEBPOOL_NORMALIZE_CHUNK', 100, 1),
   maxRedirects: intEnv('WEBPOOL_MAX_REDIRECTS', 5, 0),
+  // exploration : repos d'une requête épuisée, passages sans URL nouvelle avant épuisement
+  exploreRestDays: intEnv('WEBPOOL_EXPLORE_REST_DAYS', 30, 0),
+  exploreDryRuns: intEnv('WEBPOOL_EXPLORE_DRY_RUNS', 2, 1),
   // intranet assumé : désactive la garde d'hôte de la normalisation
   allowPrivateHosts: ['1', 'true'].includes(process.env.WEBPOOL_ALLOW_PRIVATE_HOSTS ?? ''),
   userAgent: `webpool/${version} (+https://github.com/RebelliousSmile/webpool)`,

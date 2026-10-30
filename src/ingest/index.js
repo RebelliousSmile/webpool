@@ -28,15 +28,15 @@ export const providers = {
 
 // US-03 : chaque URL candidate est insérée (ou retrouvée) dans url_item, et sa
 // découverte tracée dans url_source (provider, requête, rang, date, run).
-export async function ingest({ provider, searchQuery, input, limit }) {
+export async function ingest({ provider = 'file', searchQuery, input, limit, page = 0 }) {
   const impl = providers[provider];
   if (!impl) {
     throw new Error(`Provider inconnu : ${provider} (disponibles : ${Object.keys(providers).join(', ')})`);
   }
   if (!searchQuery) throw new Error('Option --query requise');
 
-  return withRun('ingest', { provider, query: searchQuery }, async (runId) => {
-    const results = await impl.search({ query: searchQuery, input, limit });
+  return withRun('ingest', { provider, query: searchQuery, page }, async (runId) => {
+    const results = await impl.search({ query: searchQuery, input, limit, page });
     const urls = results.map((r) => r.url);
     let inserted = 0;
     let newDomains = 0;

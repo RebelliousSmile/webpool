@@ -2,11 +2,14 @@ import { config } from '../../config.js';
 import { fetchJson, requireConfig } from './http.js';
 
 // Provider Europeana Search API (patrimoine culturel), clé gratuite via EUROPEANA_API_KEY.
-export function buildUrl(query, key, limit = 20) {
+// `page` part de 0 ; Europeana pagine par position du premier résultat (1-based).
+export function buildUrl(query, key, limit = 20, page = 0) {
   const url = new URL('https://api.europeana.eu/record/v2/search.json');
+  const rows = Math.min(limit, 100);
   url.searchParams.set('wskey', key);
   url.searchParams.set('query', query);
-  url.searchParams.set('rows', String(Math.min(limit, 100)));
+  url.searchParams.set('rows', String(rows));
+  if (page > 0) url.searchParams.set('start', String(page * rows + 1));
   return url;
 }
 
@@ -21,7 +24,7 @@ export function mapResponse(data) {
     }));
 }
 
-export async function search({ query, limit }, { fetchImpl, apiKey = config.europeanaApiKey } = {}) {
+export async function search({ query, limit, page }, { fetchImpl, apiKey = config.europeanaApiKey } = {}) {
   const key = requireConfig('europeana', apiKey, 'EUROPEANA_API_KEY');
-  return mapResponse(await fetchJson('Europeana', buildUrl(query, key, limit), { fetchImpl }));
+  return mapResponse(await fetchJson('Europeana', buildUrl(query, key, limit, page), { fetchImpl }));
 }
