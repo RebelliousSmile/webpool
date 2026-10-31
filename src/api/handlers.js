@@ -67,9 +67,11 @@ async function selectPage({ select, from, where, values, order, page }) {
   return { rows, total: countRows[0].n };
 }
 
+// La version et le commit déployé permettent au déploiement de vérifier que le
+// nouveau code sert après redémarrage.
 export async function health() {
   await query('SELECT 1');
-  return { body: { ok: true } };
+  return { body: { ok: true, version: config.version, revision: config.revision } };
 }
 
 export async function me({ client }) {

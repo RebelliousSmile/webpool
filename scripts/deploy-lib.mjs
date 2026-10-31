@@ -4,7 +4,8 @@
 
 // Liste blanche de ce qui part sur la cible : le CLI, son schéma, sa taxonomie et
 // de quoi installer ses dépendances. Tests, fixtures, outillage et docs restent locaux.
-export const DEPLOY_PATHS = ['bin', 'config', 'db', 'src', 'package.json', 'pnpm-lock.yaml', 'LICENSE'];
+// openapi.json : servi par l'API (/api/v1/openapi.json).
+export const DEPLOY_PATHS = ['bin', 'config', 'db', 'src', 'openapi.json', 'package.json', 'pnpm-lock.yaml', 'LICENSE'];
 
 const SAFE_PATH = /^[A-Za-z0-9._/-]+$/;
 const SAFE_HOST = /^[a-z0-9.-]+$/i;
@@ -95,6 +96,28 @@ export function validateTarget(name, raw) {
   if ([appDir, `${appDir}.new`, `${appDir}.old`].some((dir) => envFile.startsWith(`${dir}/`))) {
     throw new Error(`envFile ne doit pas être dans ${appDir} ni ses variantes .new/.old, purgées par la bascule (reçu : ${envFile})`);
   }
+  // Cache de médias (phase 3) : hors de appDir et de ses variantes, comme envFile.
+  const mediaDir = validateRemoteRelativePath('mediaDir', raw.mediaDir ?? 'www/webpool-data/media');
+  if ([appDir, `${appDir}.new`, `${appDir}.old`].some((dir) => mediaDir === dir || mediaDir.startsWith(`${dir}/`))) {
+    throw new Error(`mediaDir ne doit pas être dans ${appDir} ni ses variantes .new/.old (reçu : ${mediaDir})`);
+  }
+  // API (site Node.js) : URL publique pour le contrôle de santé, identifiant du
+  // site pour le redémarrage par l'API alwaysdata. Tous deux facultatifs.
+  let apiUrl = null;
+  if (raw.apiUrl !== undefined) {
+    let url;
+    try {
+      url = new URL(raw.apiUrl);
+    } catch {
+      throw new Error(`apiUrl illisible pour « ${name} » : ${raw.apiUrl}`);
+    }
+    if (url.protocol !== 'https:') throw new Error(`apiUrl doit être en https pour « ${name} » (reçu : ${raw.apiUrl})`);
+    apiUrl = url.href.replace(/\/$/, '');
+  }
+  const apiSiteId = raw.apiSiteId ?? null;
+  if (apiSiteId !== null && !(Number.isInteger(apiSiteId) && apiSiteId > 0)) {
+    throw new Error(`apiSiteId doit être l'identifiant numérique du site de l'API (reçu : ${raw.apiSiteId})`);
+  }
   const nodeVersion = String(raw.nodeVersion ?? '24');
   if (!/^\d+$/.test(nodeVersion)) throw new Error(`nodeVersion doit être une version majeure (reçu : ${nodeVersion})`);
   if (!Number.isInteger(lifecycleRevision) || lifecycleRevision < 1) {
@@ -110,6 +133,10 @@ export function validateTarget(name, raw) {
     newDir: `${appDir}.new`,
     oldDir: `${appDir}.old`,
     envFile,
+    mediaDir,
+    apiUrl,
+    apiSiteId,
+    account: user,
     nodeVersion,
     stateDir,
     guardPath: `${stateDir}/guard.json`,
@@ -196,3 +223,37 @@ export function backupFileName(date, commit) {
   const stamp = date.toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
   return `webpool-${stamp}-${commit}.dump`;
 }
+
+// Exécuté par node sur la cible (arguments : le fichier env, puis les clés
+// voulues). Seules ces clés sortent du fichier, jamais DATABASE_URL ni les clés
+// des providers.
+export const ENV_KEYS_CHECK = `
+process.loadEnvFile(process.argv[1]);
+const out = {};
+for (const key of process.argv.slice(2)) out[key] = process.env[key] ?? null;
+process.stdout.write(JSON.stringify(out));
+`;
+
+// WEBPOOL_MEDIA_DIR doit désigner le cache de la cible, en chemin absolu :
+// process.loadEnvFile ne développe pas $HOME. Renvoie le problème, ou ''.
+export function mediaDirProblem(value, home, mediaDir) {
+  const expected = `${home}/${mediaDir}`;
+  if (!value) return `WEBPOOL_MEDIA_DIR absente : le cache irait dans var/media du code, effacé à la bascule suivante (attendu ${expected})`;
+  if (value.replace(/\/+$/, '') !== expected) return `WEBPOOL_MEDIA_DIR vaut « ${value} », attendu ${expected} (chemin absolu, sans $HOME)`;
+  return '';
+}
+
+// Redémarrage d'un site par l'API alwaysdata : authentification HTTP basique,
+// identifiant « <jeton> account=<compte> », mot de passe vide. Le jeton reste
+// dans le shell local (ALWAYSDATA_API_TOKEN), jamais versionné ni transféré.
+export function restartRequest({ token, account, siteId }) {
+  if (!token) throw new Error('ALWAYSDATA_API_TOKEN absent');
+  const credentials = Buffer.from(`${token} account=${account}:`).toString('base64');
+  return {
+    url: `https://api.alwaysdata.com/v1/site/${siteId}/restart/`,
+    init: { method: 'POST', headers: { Authorization: `Basic ${credentials}` } },
+  };
+}
+
+// Réponse de /api/v1/health qui prouve que le commit déployé sert.
+export const healthMatches = (body, commit) => body?.ok === true && body.revision === commit;

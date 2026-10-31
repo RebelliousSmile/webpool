@@ -428,13 +428,14 @@ trace une ligne par requête (méthode, chemin, statut, durée, client).
 | `WEBPOOL_API_CORS_ORIGINS` | aucune | origines autorisées, séparées par des virgules (ex. l'URL de datapool) |
 
 L'API ne fait que lire : pour aller plus loin, la base peut être ouverte au serveur
-par un rôle PostgreSQL limité à `SELECT`. Elle n'est pas encore déployée : le
-déploiement actuel interdit tout accès web (`.htaccess`).
+par un rôle PostgreSQL limité à `SELECT`. Elle se déploie comme un site Node.js
+(voir *Déploiement*) ; `/api/v1/health` renvoie la version et le commit livré.
 
 ## Déploiement (alwaysdata)
 
-webpool est un CLI sans serveur : le déployer, c'est l'installer sur le compte, le
-brancher sur une base PostgreSQL du compte et planifier ses commandes.
+Le déployer, c'est installer le CLI sur le compte, le brancher sur une base
+PostgreSQL du compte, planifier ses commandes et, pour l'API, faire tourner
+`webpool serve` dans un site Node.js.
 
 **Base.** Dans l'admin, *Bases de données > PostgreSQL* : créer une base en
 PostgreSQL 17 (version du compose et de la CI) et un utilisateur avec l'accès
@@ -481,11 +482,58 @@ sont copiés une fois dans `~/www/webpool-data/<exemple>/` (`queries.json`,
 Ce répertoire est hors de `~/www/webpool`, donc la bascule ne le touche pas ; la
 base reste la seule source de vérité.
 
-**Cache de médias.** `WEBPOOL_MEDIA_DIR=$HOME/www/webpool-data/media` dans
-`~/www/webpool.env` : hors du dossier remplacé, le cache survit aux déploiements.
-Compter environ 25 Ko par vignette (250 Mo pour 10 000 liens) dans le quota du
-compte. `sharp` s'installe avec ses binaires linux-x64 lors du `pnpm install --prod`
-du staging.
+**Cache de médias.** `WEBPOOL_MEDIA_DIR=/home/<compte>/www/webpool-data/media`
+dans `~/www/webpool.env`, en chemin absolu (`process.loadEnvFile` ne développe pas
+`$HOME`) : hors du dossier remplacé, le cache survit aux déploiements. Le script
+crée le dossier (champ `mediaDir` de la cible) et refuse de livrer si la variable
+n'y pointe pas. Compter environ 25 Ko par vignette (250 Mo pour 10 000 liens) dans
+le quota du compte. `sharp` s'installe avec ses binaires linux-x64 lors du
+`pnpm install --prod` du staging.
+
+**API (site Node.js).** Une fois, dans l'admin, *Web > Sites > Ajouter un site* :
+
+| Champ | Valeur |
+|---|---|
+| Type | Node.js |
+| Adresse | `api.<domaine>` (certificat Let's Encrypt automatique) |
+| Commande | `node $HOME/www/webpool/bin/webpool.js serve` |
+| Répertoire de travail | `www/webpool` |
+| Environnement | `NODEJS_VERSION=24` |
+
+Le serveur écoute sur `IP` et `PORT` fournis par alwaysdata (lus par
+`config.js`) et lit `.env`, lié vers `~/www/webpool.env`, où ajouter
+`WEBPOOL_API_CORS_ORIGINS=https://datapool.<domaine>` (sans `/` final). Dans la
+cible locale, `apiUrl` (`https://api.<domaine>/api/v1`) et, pour un redémarrage
+automatique, `apiSiteId` (identifiant numérique du site, visible dans l'URL de sa
+page d'admin).
+
+Après la bascule, le site doit être **redémarré** : il sert sinon l'ancien code
+depuis `~/www/webpool.old`. Avec `apiSiteId` et un jeton exporté dans le shell
+local (*Profil > Jetons d'API*, jamais versionné ni copié sur la cible) :
+
+```bash
+ALWAYSDATA_API_TOKEN=… pnpm deploy:prod ad --apply   # POST /v1/site/<apiSiteId>/restart/
+```
+
+Sans jeton, le script affiche la consigne : redémarrer le site dans l'admin. Dans
+les deux cas, il attend jusqu'à 3 minutes que `<apiUrl>/health` annonce le commit
+livré (fichier `REVISION`), et sort en code 1 sinon. Un retour arrière du code se
+termine aussi par un redémarrage du site.
+
+**Première mise en production de l'API**, dans l'ordre :
+
+1. créer le site Node.js ci-dessus et compléter `~/www/webpool.env`
+   (`WEBPOOL_MEDIA_DIR`, `WEBPOOL_API_CORS_ORIGINS`) ;
+2. `pnpm deploy:prod ad` (prévisualisation), puis `--apply` : migrations jusqu'à
+   `008`, bascule, redémarrage, contrôle de `/health` ;
+3. sur la cible, créer la clé d'accès :
+   `cd ~/www/webpool && NODEJS_VERSION=24 node bin/webpool.js client add --name <nom> --scope admin`
+   (le jeton n'est affiché qu'une fois) ;
+4. `NODEJS_VERSION=24 node bin/webpool.js media` pour remplir le cache du corpus
+   déjà normalisé (les pages normalisées avant la phase 3 n'ont pas d'aperçu : les
+   rejouer avec `normalize` après les avoir remises en attente, si besoin) ;
+5. déployer datapool (`pnpm deploy:prod ad --apply` dans datapool), qui vérifie
+   que son origine figure dans `WEBPOOL_API_CORS_ORIGINS`.
 
 **Tâches planifiées** (*Avancé > Tâches planifiées*, syntaxe cron). Le CLI lit
 `.env` à la racine du dépôt quel que soit le répertoire courant, et sort en code 1

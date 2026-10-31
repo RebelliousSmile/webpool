@@ -10,6 +10,10 @@
 // et basculé sur <appDir>, fermé au web par un .htaccess.
 // Le .env de production vit hors du dépôt (<envFile>, lié en <appDir>/.env) :
 // la cible en est seule propriétaire.
+// L'API (site Node.js alwaysdata lançant `webpool serve` dans <appDir>) est
+// redémarrée après la bascule : par l'API alwaysdata si la cible a un apiSiteId
+// et que ALWAYSDATA_API_TOKEN est défini dans le shell local, sinon à la main ;
+// puis <apiUrl>/health doit annoncer le commit livré (fichier REVISION).
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -18,13 +22,17 @@ import { fileURLToPath } from 'node:url';
 import {
   DEPLOY_PATHS,
   DATABASE_URL_CHECK,
+  ENV_KEYS_CHECK,
   HTACCESS_DENY,
   assertNodeSupported,
   assertWslHome,
   backupFileName,
+  healthMatches,
+  mediaDirProblem,
   missingKeyHelp,
   parseArgs,
   parseItemized,
+  restartRequest,
   shQuote,
   sshOptions,
   validateTarget,
@@ -146,6 +154,23 @@ try {
 } catch (error) {
   throw new Error(`Connexion à la base impossible avec la DATABASE_URL de ~/${target.envFile} :\n${String(error.stderr ?? '').trim()}`, { cause: error });
 }
+// Cache de médias et origines CORS : seules ces deux clés sortent du fichier env.
+const remoteHome = ssh('printf %s "$HOME"').trim();
+const envKeys = JSON.parse(
+  ssh(`${node} -e ${shQuote(ENV_KEYS_CHECK)} "$HOME"/${target.envFile} WEBPOOL_MEDIA_DIR WEBPOOL_API_CORS_ORIGINS`),
+);
+const mediaProblem = mediaDirProblem(envKeys.WEBPOOL_MEDIA_DIR, remoteHome, target.mediaDir);
+if (mediaProblem) throw new Error(`~/${target.envFile} : ${mediaProblem}`);
+if (!envKeys.WEBPOOL_API_CORS_ORIGINS) {
+  console.warn("⚠ WEBPOOL_API_CORS_ORIGINS vide : datapool ne pourra pas appeler l'API (son déploiement le refusera).");
+}
+const autoRestart = Boolean(target.apiSiteId && process.env.ALWAYSDATA_API_TOKEN);
+console.log(
+  target.apiUrl
+    ? `API : ${target.apiUrl} — redémarrage ${autoRestart ? "par l'API alwaysdata" : "manuel (admin)"}, puis contrôle de /health`
+    : "⚠ apiUrl absente de la cible : l'API ne sera pas vérifiée après la bascule.",
+);
+
 const appExists = ssh(`test -d ${target.appDir} && echo present || echo absent`).trim() === 'present';
 const lastRaw = ssh(`cat ${target.stateDir}/last-deploy.json 2>/dev/null || true`).trim();
 const previousCommit = lastRaw ? JSON.parse(lastRaw).commit : null;
@@ -179,6 +204,8 @@ await withRemoteLock(ssh, target, async () => {
   console.log(`\nSynchronisation vers ~/${target.newDir}...`);
   rsync(target.newDir, { dryRun: false, linkDest: appExists });
   ssh(`ln -s "$HOME"/${target.envFile} ${target.newDir}/.env && printf '%s\\n' ${shQuote(HTACCESS_DENY)} > ${target.newDir}/.htaccess && chmod 644 ${target.newDir}/.htaccess`);
+  // Commit livré, renvoyé par /api/v1/health ; cache de médias hors du code.
+  ssh(`printf '%s\\n' ${commit} > ${target.newDir}/REVISION && chmod 644 ${target.newDir}/REVISION && mkdir -p ${target.mediaDir}`);
 
   // Preuve des droits sur tout l'arbre livré (répertoires 755, fichiers 644) :
   // un umask complaisant ne peut pas masquer un chemin trop permissif.
@@ -212,8 +239,37 @@ await withRemoteLock(ssh, target, async () => {
 
   const sshCmd = `wsl ssh -i ${target.sshKey} ${target.remote}`;
   console.log('\nRestauration si besoin (jusqu\'au prochain déploiement) :');
-  if (appExists) console.log(`  code   : ${sshCmd} "mv ${target.appDir} ${target.appDir}.broken && mv ${target.oldDir} ${target.appDir}"`);
+  if (appExists) console.log(`  code   : ${sshCmd} "mv ${target.appDir} ${target.appDir}.broken && mv ${target.oldDir} ${target.appDir}"`, 'puis redémarrer le site de l\'API');
   console.log(`  schéma : pg_restore --clean --if-exists -d "$DATABASE_URL" ~/${backup}  (sur la cible)`);
 });
+
+// --- API : redémarrage et contrôle ------------------------------------------
+// La bascule a renommé le répertoire sous le processus en marche : il sert
+// l'ancien code depuis .old tant que le site n'est pas redémarré.
+
+if (autoRestart) {
+  const { url, init } = restartRequest({ token: process.env.ALWAYSDATA_API_TOKEN, account: target.account, siteId: target.apiSiteId });
+  const res = await fetch(url, init).catch((err) => ({ ok: false, status: err.message }));
+  console.log(res.ok ? "\nSite de l'API redémarré (API alwaysdata)." : `\n⚠ Redémarrage refusé par l'API alwaysdata (${res.status}) : le faire dans l'admin.`);
+} else {
+  console.log("\n→ Redémarrer maintenant le site de l'API dans l'admin alwaysdata (Web > Sites) : il sert encore l'ancien code.");
+}
+
+if (target.apiUrl) {
+  console.log(`Attente de ${target.apiUrl}/health avec le commit ${shortCommit} (3 min au plus)...`);
+  let served = false;
+  for (let i = 0; i < 60 && !served; i += 1) {
+    const body = await fetch(`${target.apiUrl}/health`, { signal: AbortSignal.timeout(5000) })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+    served = healthMatches(body, commit);
+    if (!served) await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+  if (served) console.log('API à jour.');
+  else {
+    console.warn(`⚠ ${target.apiUrl}/health n'annonce pas ${shortCommit} : vérifier le site de l'API (commande, redémarrage, journaux).`);
+    process.exitCode = 1;
+  }
+}
 
 console.log(`\nDéployé : webpool v${version} (${shortCommit}) sur ${target.name}.`);

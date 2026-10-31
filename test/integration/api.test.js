@@ -65,7 +65,7 @@ describe.skipIf(!available)('API HTTP sur PostgreSQL', () => {
   };
 
   it('répond à health et sert openapi.json sans jeton', async () => {
-    expect((await get('/health')).body).toEqual({ ok: true });
+    expect((await get('/health')).body).toEqual({ ok: true, version: expect.stringMatching(/^\d+\.\d+\.\d+/), revision: null });
     expect((await get('/openapi.json')).body.openapi).toBe('3.1.0');
   });
 

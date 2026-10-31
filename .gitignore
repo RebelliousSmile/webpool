@@ -4,3 +4,4 @@ node_modules/
 deploy/targets.json
 coverage/
 var/
+REVISION
