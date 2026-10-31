@@ -149,26 +149,40 @@ export async function postEntry(db, { walletId, delta, kind, amountCents = null,
 
 async function ownerIds({ name, community }) {
   if ((name === undefined) === (community === undefined)) {
-    throw new BillingError('invalid', 'Un portefeuille : --name (client) ou --community, pas les deux');
+    throw new BillingError('invalid', 'Un portefeuille : --name (client) ou --community (apport : --community et --by), pas les deux');
   }
   return ids(name !== undefined ? { name } : { community });
 }
 
-// Don (portefeuille d'un client) ou achat (portefeuille d'une communauté),
-// saisi par l'admin à réception du paiement. `reference` identifie ce
-// paiement : le même n'est jamais crédité deux fois.
-// Sous `minCents`, les frais fixes du paiement dépassent la marge : refus,
-// sauf `force` (paiement déjà reçu, à créditer quand même).
+// Don (portefeuille personnel d'un client) ou apport à une communauté (pot
+// commun), saisi par l'admin à réception du paiement. Dans une communauté, on ne
+// paie pas pour soi : un membre verse au pot, et `contributor` garde son nom.
+// `reference` identifie le paiement : le même n'est jamais crédité deux fois.
 export async function credit({
-  name, community, cents, reference, note = null, giriPerEur = config.giriPerEur, minCents = config.minCreditCents, force = false,
+  name, community, contributor, cents, reference, note = null,
+  giriPerEur = config.giriPerEur, minCents = config.minCreditCents, force = false,
 }) {
   if (!reference?.trim()) throw new BillingError('invalid', '--ref requis : référence du paiement reçu (ex. liberapay:1234)');
+  if (contributor !== undefined && community === undefined) {
+    throw new BillingError('invalid', '--by : apport à une communauté seulement (avec --community)');
+  }
   const { clientId, communityId } = await ownerIds({ name, community });
+  let contributorId = null;
+  if (contributor !== undefined) {
+    const { rows } = await query(
+      `SELECT ac.id FROM api_client ac JOIN community_member cm ON cm.api_client_id = ac.id
+        WHERE ac.name = $1 AND cm.community_id = $2`,
+      [contributor, communityId],
+    );
+    if (rows.length === 0) throw new BillingError('not_found', `${contributor} n'est pas membre de ${community}`);
+    contributorId = Number(rows[0].id);
+  }
   if (cents < minCents && !force) {
     throw new BillingError('invalid', `Montant sous le minimum de ${(minCents / 100).toFixed(2)} € (frais de paiement) : --force pour créditer quand même`);
   }
   const giri = giriFromCents(cents, giriPerEur);
   if (giri < 1) throw new BillingError('invalid', 'Montant trop faible pour un giri');
+  const kind = clientId !== null ? 'donation' : 'purchase';
   return withTransaction(async (db) => {
     const { rows: dup } = await db.query('SELECT 1 FROM wallet_entry WHERE reference = $1', [reference.trim()]);
     if (dup.length) throw new BillingError('invalid', `Paiement déjà crédité : ${reference.trim()}`);
@@ -176,12 +190,13 @@ export async function credit({
     const balance = await postEntry(db, {
       walletId: wallet.id,
       delta: giri,
-      kind: clientId !== null ? 'donation' : 'purchase',
+      kind,
       amountCents: cents,
       reference: reference.trim(),
+      clientId: contributorId,
       note,
     });
-    return { giri, balance, kind: clientId !== null ? 'donation' : 'purchase' };
+    return { giri, balance, kind };
   });
 }
 
@@ -235,10 +250,17 @@ export async function spentLast30Days(db, { walletId, clientId }) {
 // Portefeuilles accessibles à un client : le sien, puis ceux de ses communautés.
 export async function walletsFor(clientId) {
   const personal = await ensureWallet({ query }, { clientId });
+  // Une requête : dépense du membre sur 30 jours (débits moins remboursements)
+  // et ses apports au pot commun (versements à son nom).
   const { rows } = await query(
-    `SELECT c.id AS community_id, c.slug, c.label, cm.role, cm.monthly_limit, w.id AS wallet_id, coalesce(w.balance, 0) AS balance,
+    `SELECT c.slug, c.label, cm.role, cm.monthly_limit, coalesce(w.balance, 0) AS balance,
             (SELECT coalesce(array_agg(p.slug ORDER BY p.slug), '{}')
-               FROM community_pool cp JOIN pool p ON p.id = cp.pool_id WHERE cp.community_id = c.id) AS pools
+               FROM community_pool cp JOIN pool p ON p.id = cp.pool_id WHERE cp.community_id = c.id) AS pools,
+            greatest(0, -coalesce((SELECT sum(e.delta) FROM wallet_entry e
+                                    WHERE e.wallet_id = w.id AND e.api_client_id = $1 AND e.kind IN ('debit', 'refund')
+                                      AND e.created_at > now() - interval '30 days'), 0))::bigint AS spent_30d,
+            coalesce((SELECT sum(e.delta) FROM wallet_entry e
+                       WHERE e.wallet_id = w.id AND e.api_client_id = $1 AND e.kind = 'purchase'), 0)::bigint AS contributed
        FROM community_member cm
        JOIN community c ON c.id = cm.community_id
        LEFT JOIN wallet w ON w.community_id = c.id
@@ -246,19 +268,16 @@ export async function walletsFor(clientId) {
       ORDER BY c.slug`,
     [clientId],
   );
-  const communities = [];
-  for (const r of rows) {
-    const spent = r.wallet_id === null ? 0 : await spentLast30Days({ query }, { walletId: r.wallet_id, clientId });
-    communities.push({
-      slug: r.slug,
-      label: r.label,
-      role: r.role,
-      balance: Number(r.balance),
-      monthly_limit: r.monthly_limit === null ? null : Number(r.monthly_limit),
-      spent_30d: spent,
-      pools: r.pools,
-    });
-  }
+  const communities = rows.map((r) => ({
+    slug: r.slug,
+    label: r.label,
+    role: r.role,
+    balance: Number(r.balance),
+    monthly_limit: r.monthly_limit === null ? null : Number(r.monthly_limit),
+    spent_30d: Number(r.spent_30d),
+    contributed: Number(r.contributed),
+    pools: r.pools,
+  }));
   return { personal: { balance: personal.balance }, communities };
 }
 
@@ -323,14 +342,17 @@ async function ownedCommunity(db, { clientId, community }) {
   return Number(rows[0].id);
 }
 
-// Membres, avec leur dépense sur 30 jours.
+// Membres, avec leur dépense sur 30 jours et leurs apports au pot commun.
 export async function listMembers({ clientId, community }) {
   const communityId = await ownedCommunity({ query }, { clientId, community });
   const { rows } = await query(
     `SELECT ac.name, cm.role, cm.monthly_limit, cm.joined_at, ac.revoked_at IS NOT NULL AS revoked,
             greatest(0, -coalesce((SELECT sum(e.delta) FROM wallet_entry e JOIN wallet w ON w.id = e.wallet_id
                                     WHERE w.community_id = cm.community_id AND e.api_client_id = cm.api_client_id
-                                      AND e.kind IN ('debit', 'refund') AND e.created_at > now() - interval '30 days'), 0))::bigint AS spent_30d
+                                      AND e.kind IN ('debit', 'refund') AND e.created_at > now() - interval '30 days'), 0))::bigint AS spent_30d,
+            coalesce((SELECT sum(e.delta) FROM wallet_entry e JOIN wallet w ON w.id = e.wallet_id
+                       WHERE w.community_id = cm.community_id AND e.api_client_id = cm.api_client_id
+                         AND e.kind = 'purchase'), 0)::bigint AS contributed
        FROM community_member cm JOIN api_client ac ON ac.id = cm.api_client_id
       WHERE cm.community_id = $1
       ORDER BY cm.role DESC, ac.name`,
@@ -341,6 +363,7 @@ export async function listMembers({ clientId, community }) {
     role: r.role,
     monthly_limit: r.monthly_limit === null ? null : Number(r.monthly_limit),
     spent_30d: Number(r.spent_30d),
+    contributed: Number(r.contributed),
     revoked: r.revoked,
     joined_at: r.joined_at,
   }));

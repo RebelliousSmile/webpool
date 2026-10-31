@@ -112,6 +112,13 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
     await expect(billing.credit({ name: 'carol', cents: 100 })).rejects.toThrow('--ref requis');
     await expect(billing.credit({ name: 'carol', community: 'atelier', cents: 100, reference: 'x' })).rejects.toThrow('pas les deux');
     expect(await billing.credit({ community: 'atelier', cents: 5, reference: 'virement:7', force: true })).toMatchObject({ giri: 50, kind: 'purchase' });
+    // Apport d'un membre au pot commun : à son nom, jamais sur son portefeuille personnel.
+    await expect(billing.credit({ community: 'atelier', contributor: 'carol', cents: 300, reference: 'x1' })).rejects.toThrow("carol n'est pas membre");
+    await expect(billing.credit({ name: 'bob', contributor: 'bob', cents: 300, reference: 'x2' })).rejects.toThrow('--by : apport à une communauté');
+    expect(await billing.credit({ community: 'atelier', contributor: 'alice', cents: 300, reference: 'liberapay:alice-1' }))
+      .toMatchObject({ giri: 3000, balance: 3050, kind: 'purchase' });
+    await billing.adjust({ community: 'atelier', giri: -3000, note: 'remise au solde des tests suivants' });
+    expect((await billing.walletOf({ name: 'alice' })).balance).toBe(0);
     await expect(billing.adjust({ name: 'dave', giri: -1, note: 'test' })).rejects.toThrow('Solde insuffisant');
     await expect(billing.adjust({ name: 'dave', giri: 5 })).rejects.toThrow('--note requis');
     await expectLedgerConsistent();
@@ -132,6 +139,19 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
     await expect(requests.createRequest({ clientId: who.carol.id, prices: PRICES, provider: 'brave', query: 'q', community: 'atelier', pool: 'lora' }))
       .rejects.toMatchObject({ code: 'not_found' });
     await expect(requests.createRequest({ ...bob, provider: 'file', query: '/etc/passwd' })).rejects.toMatchObject({ code: 'invalid' });
+
+    // Dans une communauté, on ne paie pas pour soi : sans `community`, un pool de
+    // la communauté est payé par son pot (ici refusé par le plafond de bob, 10 + 10 > 15).
+    await expect(requests.createRequest({ ...bob, provider: 'brave', query: 'q', pool: 'lora' }))
+      .rejects.toMatchObject({ code: 'spend_limit' });
+    // Pool de deux de ses communautés : il faut dire laquelle paie.
+    await billing.addCommunity({ slug: 'club' });
+    await billing.setMember({ community: 'club', name: 'bob' });
+    await billing.setCommunityPool({ community: 'club', pool: 'lora', attached: true });
+    await expect(requests.createRequest({ ...bob, provider: 'brave', query: 'q', pool: 'lora' }))
+      .rejects.toMatchObject({ code: 'invalid', message: expect.stringContaining('atelier, club') });
+    await billing.setCommunityPool({ community: 'club', pool: 'lora', attached: false });
+    await billing.removeMember({ community: 'club', name: 'bob' });
 
     // Sans giri : rien n'est écrit.
     await expect(requests.createRequest({ clientId: who.dave.id, prices: PRICES, provider: 'brave', query: 'q' }))
@@ -228,7 +248,7 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
     const report = await billing.billingReport({ days: 30, usdEur: 1, giriPerEur: 1000 });
     expect(report.credits).toEqual([
       { kind: 'donation', entries: 1, giri: 1000, eur: 1 },
-      { kind: 'purchase', entries: 1, giri: 50, eur: 0.05 },
+      { kind: 'purchase', entries: 2, giri: 3050, eur: 3.05 },
     ]);
     const brave = report.providers.find((p) => p.provider === 'brave');
     // bob : 10 giri, forest : 20 gardés, crash : 10, perso : 10 ; panne remboursée ; annulées sans appel
@@ -249,7 +269,7 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
       expect(body.prices.map((p) => p.provider)).toEqual(['openrouter', 'brave']);
       expect(body.prices[0]).not.toHaveProperty('cost_usd');
       expect(body.communities).toEqual([
-        { slug: 'atelier', label: 'Atelier', role: 'member', balance: 40, monthly_limit: 15, spent_30d: 10, pools: ['lora'] },
+        { slug: 'atelier', label: 'Atelier', role: 'member', balance: 40, monthly_limit: 15, spent_30d: 10, contributed: 0, pools: ['lora'] },
       ]);
     });
 
@@ -288,6 +308,8 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
       const entries = await call('GET', '/billing/entries?community=atelier', who.alice);
       expect(entries.body.items.map((e) => [e.kind, e.delta, e.client])).toEqual([
         ['debit', -10, 'bob'],
+        ['adjustment', -3000, null],
+        ['purchase', 3000, 'alice'],
         ['purchase', 50, null],
       ]);
       const mine = await call('GET', '/billing/entries', who.dave);
@@ -319,9 +341,9 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
     it('membres gérés par les propriétaires, qui gardent toujours un propriétaire', async () => {
       expect((await call('GET', '/communities/atelier/members', who.bob)).status).toBe(404);
       const list = await call('GET', '/communities/atelier/members', who.alice);
-      expect(list.body.items.map((m) => [m.name, m.role, m.monthly_limit, m.spent_30d])).toEqual([
-        ['alice', 'owner', null, 0],
-        ['bob', 'member', 15, 10],
+      expect(list.body.items.map((m) => [m.name, m.role, m.monthly_limit, m.spent_30d, m.contributed])).toEqual([
+        ['alice', 'owner', null, 0, 3000],
+        ['bob', 'member', 15, 10, 0],
       ]);
       expect((await call('PUT', '/communities/atelier/members/dave', who.bob, {})).status).toBe(404);
       const added = await call('PUT', '/communities/atelier/members/dave', who.alice, { monthly_limit: 100 });

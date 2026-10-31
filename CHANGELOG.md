@@ -12,6 +12,7 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions [Sem
 - Pools publics (`webpool pool publish|unpublish`, champ `public`) : visibles et exportables par tout client sans accord.
 - Membres d'une communauté gérés par ses propriétaires : `GET /communities/{slug}/members`, `PUT|DELETE /communities/{slug}/members/{name}` ; la communauté garde un propriétaire actif.
 - Crédit minimal (`WEBPOOL_MIN_CREDIT_CENTS`, 2 € ; `wallet credit --force`), encours des giri non dépensés dans `billing report`.
+- Dans une communauté, on ne paie pas pour soi : apports des membres au pot commun (`wallet credit --community … --by <membre>`, champ `contributed` dans `/billing` et la liste des membres) ; une recherche sur un pool d'une communauté du client est toujours payée par elle.
 - Verrou du pipeline partagé par `cycle` et `requests run` (`src/lock.js`) : jamais deux normalisations de la même file en même temps.
 
 - Export des pools ouvert aux clients `read` (`GET /api/v1/pools/{slug}/export`), sans définition ni score ; format `txt` (une URL par ligne) pour l'API et `pool export` ; usage commercial dans le corpus (`/admin/urls`).

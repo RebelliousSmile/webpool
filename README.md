@@ -348,9 +348,11 @@ page par page) consomme des tokens : elle se paie d'avance en **giri**, l'unité
 entière du grand livre (1 € = `WEBPOOL_GIRI_PER_EUR` giri, 1 000 par défaut).
 
 - Un particulier crédite son portefeuille personnel par un **don**.
-- Une **communauté** achète des giri ; ses membres les dépensent pour ajouter des
-  recherches à ses pools, qu'ils voient sans accord individuel. Ses
-  propriétaires gèrent les membres et leurs plafonds depuis l'API (datapool).
+- Dans une **communauté**, on ne paie pas pour soi : les membres versent des giri
+  au **pot commun** (apport à leur nom), et les recherches sur les pools de la
+  communauté se paient sur ce pot, jamais sur un portefeuille personnel. Les
+  membres voient ces pools sans accord individuel ; les propriétaires gèrent les
+  membres et leurs plafonds depuis l'API (datapool).
 - Un **pool public** (`pool publish`) est visible et exportable par tout client,
   sans accord : c'est l'accès gratuit par défaut. Un accès reste un jeton créé par
   l'admin (`client add`) ; il n'y a pas d'inscription en libre-service.
@@ -365,7 +367,7 @@ pnpm webpool community attach --slug atelier --pool nagasaki
 # Paiement reçu (Liberapay, Ko-fi, virement…) : don ou achat, crédité une seule fois par référence
 pnpm webpool pool publish --slug nagasaki        # visible par tout client (unpublish pour revenir)
 pnpm webpool wallet credit --name carol --eur 5 --ref liberapay:1234   # 2 € au moins, sinon --force
-pnpm webpool wallet credit --community atelier --eur 20 --ref virement:2026-10-31
+pnpm webpool wallet credit --community atelier --by bob --eur 20 --ref virement:2026-10-31   # apport de bob au pot
 pnpm webpool wallet adjust --community atelier --giri=-500 --note "geste commercial annulé"
 pnpm webpool wallet show --community atelier
 
@@ -390,8 +392,9 @@ recherche achète de 1 à `WEBPOOL_REQUEST_MAX_PAGES` pages (1 seule pour
 OpenRouter, qui ne pagine pas). Le prix est débité dans la transaction qui
 l'inscrit : solde insuffisant (402), plafond du membre atteint (402) ou trop de
 recherches en attente (429, `WEBPOOL_REQUEST_MAX_QUEUED`), et rien n'est écrit.
-Payée par une communauté, la recherche vise obligatoirement un pool de cette
-communauté. Son auteur peut l'annuler tant qu'elle attend, et il est alors
+Une recherche sur un pool d'une des communautés du client est payée par cette
+communauté, sans choix : `community` est déduite, ou exigée si plusieurs de ses
+communautés possèdent le pool. Le pot d'une communauté ne paie que ses pools. Son auteur peut l'annuler tant qu'elle attend, et il est alors
 remboursé.
 
 **Exécution.** `requests run` (toutes les 15 minutes) tient le verrou consultatif

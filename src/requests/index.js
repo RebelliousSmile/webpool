@@ -76,7 +76,7 @@ async function visiblePoolId(db, { clientId, isAdmin, slug }) {
 
 // Inscrit une recherche et la paie, en une transaction. Sur le portefeuille
 // d'une communauté, la recherche vise un de ses pools et respecte le plafond
-// du membre.
+// du membre ; un pool d'une communauté du client se paie toujours par elle.
 export async function createRequest({
   clientId,
   isAdmin = false,
@@ -109,6 +109,21 @@ export async function createRequest({
     }
 
     const poolId = pool ? await visiblePoolId(db, { clientId, isAdmin, slug: pool }) : null;
+    // Dans une communauté, on ne paie pas pour soi : une recherche sur un pool
+    // d'une de ses communautés se paie sur le pot commun, jamais en personnel.
+    if (poolId !== null && !community) {
+      const { rows: payers } = await db.query(
+        `SELECT c.slug FROM community_pool cp
+           JOIN community c ON c.id = cp.community_id
+           JOIN community_member cm ON cm.community_id = c.id AND cm.api_client_id = $2
+          WHERE cp.pool_id = $1 ORDER BY c.slug`,
+        [poolId, clientId],
+      );
+      if (payers.length > 1) {
+        throw new BillingError('invalid', `Pool de plusieurs de vos communautés : préciser laquelle paie (${payers.map((r) => r.slug).join(', ')})`);
+      }
+      if (payers.length === 1) community = payers[0].slug;
+    }
     let wallet;
     let member = null;
     if (community) {

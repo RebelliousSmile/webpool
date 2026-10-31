@@ -3,7 +3,7 @@
   "info": {
     "title": "webpool API",
     "version": "1.0.0",
-    "description": "API HTTP de webpool (`webpool serve`). Authentification par jeton `Authorization: Bearer`, créé avec `webpool client add`. Un client `read` voit les pools qui lui sont accordés (`webpool client grant`) et ceux des communautés dont il est membre ; les routes `/admin` sont réservées aux clients `admin`. Les pools sont gratuits ; une recherche (appel à un provider) se paie d'avance en giri, sur le portefeuille du client (crédité par un don) ou sur celui d'une communauté (giri achetés), et ne s'écrit que par `POST /requests`. Le reste de l'API ne fait que lire."
+    "description": "API HTTP de webpool (`webpool serve`). Authentification par jeton `Authorization: Bearer`, créé avec `webpool client add`. Un client `read` voit les pools qui lui sont accordés (`webpool client grant`) et ceux des communautés dont il est membre ; les routes `/admin` sont réservées aux clients `admin`. Les pools sont gratuits ; une recherche (appel à un provider) se paie d'avance en giri, sur le portefeuille du client (crédité par un don) ou, pour les pools d'une communauté, sur son pot commun (alimenté par les apports de ses membres) : dans une communauté, on ne paie pas pour soi, et ne s'écrit que par `POST /requests`. Le reste de l'API ne fait que lire."
   },
   "servers": [
     {
@@ -2447,7 +2447,8 @@
           "balance",
           "monthly_limit",
           "spent_30d",
-          "pools"
+          "pools",
+          "contributed"
         ],
         "properties": {
           "slug": {
@@ -2484,6 +2485,10 @@
               "type": "string"
             },
             "description": "pools de la communauté, seuls payables par son portefeuille"
+          },
+          "contributed": {
+            "type": "integer",
+            "description": "giri versés par le membre au pot commun (apports à son nom)"
           }
         }
       },
@@ -2562,7 +2567,8 @@
               "debit",
               "refund",
               "adjustment"
-            ]
+            ],
+            "description": "donation : don sur un portefeuille personnel ; purchase : apport au pot d'une communauté"
           },
           "amount_cents": {
             "type": [
@@ -2589,7 +2595,7 @@
               "string",
               "null"
             ],
-            "description": "client qui a dépensé"
+            "description": "client qui a dépensé (débit, remboursement) ou versé (apport à une communauté)"
           },
           "note": {
             "type": [
@@ -2746,11 +2752,11 @@
           },
           "pool": {
             "type": "string",
-            "description": "pool visé (visible par le client) ; requis pour payer avec une communauté"
+            "description": "pool visé (visible par le client) ; un pool d'une de vos communautés est payé par son pot"
           },
           "community": {
             "type": "string",
-            "description": "communauté dont le portefeuille paie ; absent : portefeuille personnel"
+            "description": "communauté dont le pot paie. Un pool d'une de vos communautés se paie toujours par elle : déduite si une seule communauté possède le pool, obligatoire si plusieurs ; jamais en personnel."
           }
         }
       },
@@ -2793,7 +2799,8 @@
           "monthly_limit",
           "spent_30d",
           "revoked",
-          "joined_at"
+          "joined_at",
+          "contributed"
         ],
         "properties": {
           "name": {
@@ -2823,6 +2830,10 @@
           "joined_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "contributed": {
+            "type": "integer",
+            "description": "giri versés par le membre au pot commun (apports à son nom)"
           }
         }
       },

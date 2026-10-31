@@ -56,7 +56,8 @@ Usage :
   webpool community join --slug <communauté> --name <client> [--role owner|member] [--monthly N|none]   (plafond en giri sur 30 jours ; option absente : inchangée)
   webpool community leave --slug <communauté> --name <client>
   webpool community attach|detach --slug <communauté> --pool <pool>   (pools visibles par les membres, payables par la communauté)
-  webpool wallet credit (--name <client> | --community <slug>) --eur 12,50 --ref <paiement> [--note "…"] [--force]   (don ou achat de giri ; --force sous le minimum)
+  webpool wallet credit (--name <client> | --community <slug> [--by <membre>]) --eur 12,50 --ref <paiement> [--note "…"] [--force]
+                                          (don personnel, ou apport au pot de la communauté au nom d'un membre ; --force sous le minimum)
   webpool wallet adjust (--name <client> | --community <slug>) --giri=±N --note "…"   (ex. --giri=-50)
   webpool wallet show (--name <client> | --community <slug>)
   webpool pricing                          (prix d'un appel par provider, en giri et en €)
@@ -102,6 +103,7 @@ const OPTIONS = {
   giri: { type: 'string' },
   id: { type: 'string' },
   days: { type: 'string' },
+  by: { type: 'string' },
   help: { type: 'boolean', short: 'h', default: false },
 };
 
@@ -380,8 +382,11 @@ async function main() {
       if (subcommand === 'credit') {
         if (!values.eur) throw new Error('wallet credit : --eur requis');
         const cents = parseEuros(values.eur);
-        const res = await credit({ ...walletOwner(values), cents, reference: values.ref, note: values.note, force: values.force });
-        console.log(`${res.kind === 'donation' ? 'Don' : 'Achat'} de ${(cents / 100).toFixed(2).replace('.', ',')} € : +${res.giri} giri, solde ${res.balance} giri.`);
+        const res = await credit({
+          ...walletOwner(values), contributor: values.by, cents, reference: values.ref, note: values.note, force: values.force,
+        });
+        const what = res.kind === 'donation' ? 'Don' : `Apport à la communauté${values.by ? ` par ${values.by}` : ''}`;
+        console.log(`${what} de ${(cents / 100).toFixed(2).replace('.', ',')} € : +${res.giri} giri, solde ${res.balance} giri.`);
       } else if (subcommand === 'adjust') {
         if (!/^[+-]?\d+$/.test(values.giri ?? '')) throw new Error('wallet adjust : --giri entier requis (ex. --giri=-50)');
         const res = await adjust({ ...walletOwner(values), giri: Number(values.giri), note: values.note });
@@ -445,7 +450,7 @@ async function main() {
       const days = parsePositive('days', values.days) ?? 30;
       const r = await billingReport({ days });
       console.log(`Sur ${days} jours :`);
-      for (const c of r.credits) console.log(`  ${c.kind === 'donation' ? 'dons  ' : 'achats'} : ${c.entries}, ${c.eur.toFixed(2)} €, ${c.giri} giri`);
+      for (const c of r.credits) console.log(`  ${c.kind === 'donation' ? 'dons  ' : 'apports'} : ${c.entries}, ${c.eur.toFixed(2)} €, ${c.giri} giri`);
       if (r.credits.length === 0) console.log('  aucun crédit');
       console.log(`  encours : ${r.outstanding.personal} giri personnels, ${r.outstanding.communities} giri de communautés (${r.outstanding.eur.toFixed(2)} €)`);
       for (const p of r.providers) {
