@@ -4,6 +4,14 @@ import { defaultDatabaseUrl, intEnv, loadDotEnv, ratioEnv, rootDir } from './env
 
 loadDotEnv();
 
+function readRevision() {
+  try {
+    return fs.readFileSync(path.join(rootDir, 'REVISION'), 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 const { version } = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
 
 // Gelée : les réglages se passent en paramètre (tests compris), jamais par mutation.
@@ -53,4 +61,7 @@ export const config = Object.freeze({
     .map((o) => o.trim())
     .filter(Boolean),
   userAgent: `webpool/${version} (+https://github.com/RebelliousSmile/webpool)`,
+  version,
+  // commit déployé, écrit par scripts/deploy.mjs dans REVISION ; null en développement
+  revision: readRevision(),
 });

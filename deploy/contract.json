@@ -30,11 +30,25 @@
         "behavior": "fail"
       },
       "trigger": "manual",
-      "secretNames": ["DATABASE_URL", "OPENROUTER_API_KEY", "BRAVE_API_KEY", "SEARXNG_URL", "EUROPEANA_API_KEY", "FLICKR_API_KEY"],
+      "secretNames": [
+        "DATABASE_URL",
+        "OPENROUTER_API_KEY",
+        "BRAVE_API_KEY",
+        "SEARXNG_URL",
+        "EUROPEANA_API_KEY",
+        "FLICKR_API_KEY",
+        "WEBPOOL_API_CORS_ORIGINS",
+        "WEBPOOL_MEDIA_DIR"
+      ],
       "invocation": {
         "command": "pnpm run deploy:prod ad --apply",
         "workingDirectory": ".",
-        "operations": ["deploy:init", "deploy:code", "deploy:schema"]
+        "operations": [
+          "deploy:init",
+          "deploy:code",
+          "deploy:schema",
+          "deploy:api"
+        ]
       }
     }
   ],
@@ -43,17 +57,29 @@
       "name": "deploy:init",
       "surface": "schema",
       "authority": "local",
-      "phases": ["production"],
+      "phases": [
+        "production"
+      ],
       "destructive": false,
-      "preconditions": ["explicit target ad", "reachable SSH host with the dedicated WSL key", "guard absent or identical to {targetId: ad, phase: production, lifecycleRevision: 1}"],
-      "proof": ["remote guard file equals target ad, production, lifecycle revision 1 (read and compared before any mutation)"],
-      "recovery": ["remove the non-secret guard file only before any release uses lifecycle revision 1"]
+      "preconditions": [
+        "explicit target ad",
+        "reachable SSH host with the dedicated WSL key",
+        "guard absent or identical to {targetId: ad, phase: production, lifecycleRevision: 1}"
+      ],
+      "proof": [
+        "remote guard file equals target ad, production, lifecycle revision 1 (read and compared before any mutation)"
+      ],
+      "recovery": [
+        "remove the non-secret guard file only before any release uses lifecycle revision 1"
+      ]
     },
     {
       "name": "deploy:code",
       "surface": "code",
       "authority": "local",
-      "phases": ["production"],
+      "phases": [
+        "production"
+      ],
       "destructive": false,
       "preconditions": [
         "current branch is main (or --any-branch)",
@@ -63,16 +89,21 @@
         "remote Node satisfies ^22.12.0 || >=24 under NODEJS_VERSION",
         "git archive of the commit plus `pnpm install --prod --frozen-lockfile` succeed in a native Linux WSL staging directory (not DrvFs)",
         "the alwaysdata scheduled task (`node bin/webpool.js cycle --budget 20` in ~/www/webpool, NODEJS_VERSION=24, cron `0 4 * * 1`) is not running: it is target-authoritative, created in the admin and never deployed, and it runs from the directory the swap replaces",
-        "~/www/webpool-data (example queries and pool definitions imported on the target) is target-authoritative and outside the swapped ~/www/webpool; it is never shipped nor deleted"
+        "~/www/webpool-data (example queries and pool definitions imported on the target) is target-authoritative and outside the swapped ~/www/webpool; it is never shipped nor deleted",
+        "WEBPOOL_MEDIA_DIR in ~/www/webpool.env is the absolute path of the target mediaDir (default ~/www/webpool-data/media, outside the swapped ~/www/webpool); read on the target by node, only WEBPOOL_MEDIA_DIR and WEBPOOL_API_CORS_ORIGINS leave the file"
       ],
       "proof": [
         "rsync exits 0 into ~/www/webpool.new with --chmod=D755,F644",
         "find over ~/www/webpool.new reports no directory other than 755 and no file other than 644",
         "`webpool stats` exits 0 from ~/www/webpool.new before the swap",
         "rsync mirrors code only: /.env and /.htaccess are excluded from deletion and written by the script",
-        "after the swap, ~/www/webpool/.env is a symlink to ~/www/webpool.env, ~/www/webpool/.htaccess denies all web access and ~/www/webpool/bin/webpool.js exists"
+        "after the swap, ~/www/webpool/.env is a symlink to ~/www/webpool.env, ~/www/webpool/.htaccess denies all web access and ~/www/webpool/bin/webpool.js exists",
+        "openapi.json is part of the shipped tree (DEPLOY_PATHS)",
+        "~/www/webpool/REVISION holds the deployed commit; the media cache directory exists"
       ],
-      "recovery": ["swap ~/www/webpool.old back over ~/www/webpool; ~/www/webpool.old is only purged at the START of the next deploy:code, so it survives until then"],
+      "recovery": [
+        "swap ~/www/webpool.old back over ~/www/webpool; ~/www/webpool.old is only purged at the START of the next deploy:code, so it survives until then"
+      ],
       "sync": {
         "comparison": "content-hash",
         "deletions": "mirror",
@@ -83,11 +114,42 @@
       "name": "deploy:schema",
       "surface": "schema",
       "authority": "local",
-      "phases": ["production"],
+      "phases": [
+        "production"
+      ],
       "destructive": false,
-      "preconditions": ["deploy:code staged in ~/www/webpool.new", "pg_dump available on the target", "fresh pg_dump -Fc of the database succeeds before migrating"],
-      "proof": ["`webpool migrate` exits 0 (each migration runs in its own transaction with its schema_migration row)", "`webpool stats` exits 0 against the migrated schema"],
-      "recovery": ["pg_restore --clean --if-exists from ~/deploy/webpool-ad/backups/webpool-<stamp>-<commit>.dump; the five most recent dumps are kept"]
+      "preconditions": [
+        "deploy:code staged in ~/www/webpool.new",
+        "pg_dump available on the target",
+        "fresh pg_dump -Fc of the database succeeds before migrating"
+      ],
+      "proof": [
+        "`webpool migrate` exits 0 (each migration runs in its own transaction with its schema_migration row)",
+        "`webpool stats` exits 0 against the migrated schema"
+      ],
+      "recovery": [
+        "pg_restore --clean --if-exists from ~/deploy/webpool-ad/backups/webpool-<stamp>-<commit>.dump; the five most recent dumps are kept"
+      ]
+    },
+    {
+      "name": "deploy:api",
+      "surface": "code",
+      "authority": "local",
+      "phases": [
+        "production"
+      ],
+      "destructive": false,
+      "preconditions": [
+        "deploy:code swapped ~/www/webpool",
+        "an alwaysdata Node.js site (target-authoritative, configured in the admin, never created by this script) whose command is `node $HOME/www/webpool/bin/webpool.js serve` (listens on IP/PORT provided by alwaysdata), NODEJS_VERSION=24",
+        "optional automatic restart: apiSiteId in deploy/targets.json and ALWAYSDATA_API_TOKEN exported in the local shell only (never versioned nor sent to the target); otherwise the operator restarts the site in the admin when prompted"
+      ],
+      "proof": [
+        "GET <apiUrl>/health answers {ok: true, revision: <deployed commit>} within 3 minutes (exit code 1 otherwise)"
+      ],
+      "recovery": [
+        "restore the code (~/www/webpool.old) as in deploy:code, then restart the site so that /health announces the previous commit"
+      ]
     }
   ]
 }

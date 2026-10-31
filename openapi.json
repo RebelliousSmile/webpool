@@ -45,6 +45,16 @@
                   "properties": {
                     "ok": {
                       "type": "boolean"
+                    },
+                    "version": {
+                      "type": "string"
+                    },
+                    "revision": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Commit déployé (fichier REVISION) ; null hors déploiement"
                     }
                   }
                 }

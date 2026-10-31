@@ -6,6 +6,9 @@
     "appDir": "www/webpool",
     "envFile": "www/webpool.env",
     "nodeVersion": "24",
-    "lifecycleRevision": 1
+    "lifecycleRevision": 1,
+    "mediaDir": "www/webpool-data/media",
+    "apiUrl": "https://api.<domaine>/api/v1",
+    "apiSiteId": 0
   }
 }

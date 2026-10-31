@@ -5,6 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   DATABASE_URL_CHECK,
+  DEPLOY_PATHS,
+  ENV_KEYS_CHECK,
+  healthMatches,
+  mediaDirProblem,
+  restartRequest,
   assertNodeSupported,
   assertWslHome,
   backupFileName,
@@ -44,6 +49,10 @@ describe('validateTarget', () => {
       oldDir: 'www/webpool.old',
       envFile: 'www/webpool.env',
       nodeVersion: '24',
+      mediaDir: 'www/webpool-data/media',
+      apiUrl: null,
+      apiSiteId: null,
+      account: 'compte',
       lockPath: 'deploy/webpool-ad/lock',
       guard: { targetId: 'ad', phase: 'production', lifecycleRevision: 1 },
     });
@@ -62,6 +71,19 @@ describe('validateTarget', () => {
       expect(() => validateTarget('ad', { ...RAW, envFile })).toThrow(/purgées/);
     }
     expect(validateTarget('ad', { ...RAW, envFile: 'www/webpool-env/x.env' }).envFile).toBe('www/webpool-env/x.env');
+  });
+
+  it("lit l'API et le cache de médias de la cible, et refuse les valeurs douteuses", () => {
+    const t = validateTarget('ad', { ...RAW, apiUrl: 'https://api.ex.org/api/v1/', apiSiteId: 1234, mediaDir: 'www/data/media' });
+    expect(t).toMatchObject({ apiUrl: 'https://api.ex.org/api/v1', apiSiteId: 1234, mediaDir: 'www/data/media' });
+    expect(() => validateTarget('ad', { ...RAW, apiUrl: 'http://api.ex.org' })).toThrow(/https/);
+    expect(() => validateTarget('ad', { ...RAW, apiUrl: 'pas une url' })).toThrow(/illisible/);
+    expect(() => validateTarget('ad', { ...RAW, apiSiteId: '12' })).toThrow(/apiSiteId/);
+    expect(() => validateTarget('ad', { ...RAW, apiSiteId: 0 })).toThrow(/apiSiteId/);
+    for (const mediaDir of ['www/webpool', 'www/webpool/var/media', 'www/webpool.old/media']) {
+      expect(() => validateTarget('ad', { ...RAW, mediaDir })).toThrow(/mediaDir/);
+    }
+    expect(() => validateTarget('ad', { ...RAW, mediaDir: '../x' })).toThrow(/relatif/);
   });
 
   it('refuse une révision de cycle de vie absente et une version de Node non majeure', () => {
@@ -172,5 +194,49 @@ describe('DATABASE_URL_CHECK', () => {
     expect(run(undefined)).toBe('absente');
     expect(run('postgres://u:p@h.example:5433/base')).toMatch(/5433/);
     expect(run('mysql://u:p@h.example/base')).toMatch(/schéma/);
+  });
+});
+
+describe('API et médias sur la cible', () => {
+  it('livre openapi.json, servi par l’API', () => {
+    expect(DEPLOY_PATHS).toContain('openapi.json');
+  });
+
+  it('exige un WEBPOOL_MEDIA_DIR absolu qui désigne le cache de la cible', () => {
+    expect(mediaDirProblem('/home/compte/www/webpool-data/media', '/home/compte', 'www/webpool-data/media')).toBe('');
+    expect(mediaDirProblem('/home/compte/www/webpool-data/media/', '/home/compte', 'www/webpool-data/media')).toBe('');
+    expect(mediaDirProblem(null, '/home/compte', 'www/webpool-data/media')).toMatch(/absente.*var\/media/);
+    expect(mediaDirProblem('$HOME/www/webpool-data/media', '/home/compte', 'www/webpool-data/media')).toMatch(/sans \$HOME/);
+  });
+
+  it("ne fait sortir du fichier env que les clés demandées", () => {
+    const dir = mkdtempSync(join(tmpdir(), 'webpool-env-'));
+    const file = join(dir, 'x.env');
+    writeFileSync(file, 'DATABASE_URL=postgres://u:secret@h/b\nWEBPOOL_MEDIA_DIR=/m\n');
+    const env = { ...process.env };
+    delete env.WEBPOOL_MEDIA_DIR;
+    delete env.WEBPOOL_API_CORS_ORIGINS;
+    try {
+      const out = execFileSync(process.execPath, ['-e', ENV_KEYS_CHECK, file, 'WEBPOOL_MEDIA_DIR', 'WEBPOOL_API_CORS_ORIGINS'], { encoding: 'utf8', env });
+      expect(JSON.parse(out)).toEqual({ WEBPOOL_MEDIA_DIR: '/m', WEBPOOL_API_CORS_ORIGINS: null });
+      expect(out).not.toContain('secret');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("construit la requête de redémarrage de l'API alwaysdata", () => {
+    const { url, init } = restartRequest({ token: 'TOK', account: 'compte', siteId: 1234 });
+    expect(url).toBe('https://api.alwaysdata.com/v1/site/1234/restart/');
+    expect(init.method).toBe('POST');
+    expect(Buffer.from(init.headers.Authorization.replace('Basic ', ''), 'base64').toString()).toBe('TOK account=compte:');
+    expect(() => restartRequest({ token: '', account: 'compte', siteId: 1 })).toThrow(/ALWAYSDATA_API_TOKEN/);
+  });
+
+  it('ne reconnaît que le commit livré dans /health', () => {
+    expect(healthMatches({ ok: true, revision: 'abc' }, 'abc')).toBe(true);
+    expect(healthMatches({ ok: true, revision: 'old' }, 'abc')).toBe(false);
+    expect(healthMatches({ ok: true, revision: null }, 'abc')).toBe(false);
+    expect(healthMatches(null, 'abc')).toBe(false);
   });
 });
