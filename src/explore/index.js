@@ -335,7 +335,7 @@ export async function explore({
           try {
             res = await call(fallback, q.query, 0);
           } catch (err2) {
-            throw new Error(`${fallbackError} ; repli ${fallback} : ${err2.message ?? err2}`);
+            throw new Error(`${fallbackError} ; repli ${fallback} : ${err2.message ?? err2}`, { cause: err2 });
           }
         }
         const runPage = servedBy === q.provider ? page : 0;

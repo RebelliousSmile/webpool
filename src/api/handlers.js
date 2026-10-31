@@ -1,0 +1,400 @@
+import { query } from '../db.js';
+import { stats } from '../stats.js';
+import { USAGE_VALUES } from '../domains/index.js';
+import { QUERY_STATUSES, listQueries } from '../explore/index.js';
+import { formatPool, FORMATS } from '../pools/export.js';
+import { loadPoolForExport } from '../pools/index.js';
+import {
+  boolParam,
+  enumParam,
+  facetParams,
+  idParam,
+  likePattern,
+  notFound,
+  num,
+  pageParams,
+  paged,
+} from './params.js';
+
+// Handlers en lecture seule. Chacun reçoit { client, params, query } et renvoie
+// { body } (JSON) ou { raw, contentType, filename }.
+
+const URL_STATUSES = ['pending', 'normalized', 'classified', 'duplicate', 'error'];
+const RUN_KINDS = ['ingest', 'normalize', 'classify', 'pool', 'explore'];
+const RUN_STATUSES = ['running', 'done', 'failed'];
+const URL_ORDERS = {
+  recent: 'ui.first_seen_at DESC, ui.id DESC',
+  quality: 'ui.quality_score DESC NULLS LAST, ui.id',
+  relevance: 'ui.relevance_score DESC NULLS LAST, ui.id',
+};
+const TOP_DOMAINS = 20;
+
+const iso = (d) => (d ? new Date(d).toISOString() : null);
+const isAdmin = (client) => client.scope === 'admin';
+
+// Page d'une requête filtrée : les fragments SQL sont des constantes du module,
+// les valeurs sont toujours paramétrées.
+async function selectPage({ select, from, where, values, order, page }) {
+  const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const [{ rows }, { rows: countRows }] = await Promise.all([
+    query(
+      `SELECT ${select} FROM ${from} ${clause} ORDER BY ${order} LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      [...values, page.limit, page.offset],
+    ),
+    query(`SELECT count(*)::int AS n FROM ${from} ${clause}`, values),
+  ]);
+  return { rows, total: countRows[0].n };
+}
+
+export async function health() {
+  await query('SELECT 1');
+  return { body: { ok: true } };
+}
+
+export async function me({ client }) {
+  return { body: { name: client.name, scope: client.scope } };
+}
+
+// --- Pools : visibles par l'admin, ou accordés au client `read`.
+
+async function visiblePool(client, slug) {
+  const { rows } = await query(
+    `SELECT p.id, p.slug, p.label, p.definition, p.created_at, p.refreshed_at
+       FROM pool p
+      WHERE p.slug = $1
+        AND ($2 OR EXISTS (SELECT 1 FROM api_client_pool cp WHERE cp.pool_id = p.id AND cp.api_client_id = $3))`,
+    [slug, isAdmin(client), client.id],
+  );
+  // Un pool non accordé est introuvable : son existence n'est pas révélée.
+  if (rows.length === 0) throw notFound(`Pool inconnu : ${slug}`);
+  return rows[0];
+}
+
+export async function listPools({ client }) {
+  const { rows } = await query(
+    `SELECT p.slug, p.label, p.refreshed_at, count(pi.url_item_id)::int AS items
+       FROM pool p
+       LEFT JOIN pool_item pi ON pi.pool_id = p.id
+      WHERE $1 OR EXISTS (SELECT 1 FROM api_client_pool cp WHERE cp.pool_id = p.id AND cp.api_client_id = $2)
+      GROUP BY p.id ORDER BY p.slug`,
+    [isAdmin(client), client.id],
+  );
+  return { body: { items: rows.map((r) => ({ ...r, refreshed_at: iso(r.refreshed_at) })) } };
+}
+
+export async function getPool({ client, params }) {
+  const pool = await visiblePool(client, params.slug);
+  const [{ rows: domains }, { rows: usage }] = await Promise.all([
+    query(
+      `SELECT ui.domain, count(*)::int AS urls
+         FROM pool_item pi JOIN url_item ui ON ui.id = pi.url_item_id
+        WHERE pi.pool_id = $1
+        GROUP BY ui.domain ORDER BY urls DESC, ui.domain LIMIT $2`,
+      [pool.id, TOP_DOMAINS],
+    ),
+    query(
+      `SELECT dp.usage_commercial AS usage, count(*)::int AS urls
+         FROM pool_item pi
+         JOIN url_item ui ON ui.id = pi.url_item_id
+         LEFT JOIN domain_profile dp ON dp.domain = ui.domain
+        WHERE pi.pool_id = $1
+        GROUP BY dp.usage_commercial ORDER BY urls DESC`,
+      [pool.id],
+    ),
+  ]);
+  const body = {
+    slug: pool.slug,
+    label: pool.label,
+    refreshed_at: iso(pool.refreshed_at),
+    items: usage.reduce((n, u) => n + u.urls, 0),
+    top_domains: domains,
+    usage_commercial: usage,
+  };
+  // Les critères de sélection restent internes.
+  if (isAdmin(client)) Object.assign(body, { created_at: iso(pool.created_at), definition: pool.definition });
+  return { body };
+}
+
+export async function listPoolItems({ client, params, query: qs }) {
+  const pool = await visiblePool(client, params.slug);
+  const page = pageParams(qs);
+  const { rows, total } = await selectPage({
+    select: `pi.rank, pi.score, ui.id, ui.canonical_url, ui.domain, ui.title, dp.usage_commercial`,
+    from: `pool_item pi
+           JOIN url_item ui ON ui.id = pi.url_item_id
+           LEFT JOIN domain_profile dp ON dp.domain = ui.domain`,
+    where: ['pi.pool_id = $1'],
+    values: [pool.id],
+    order: 'pi.rank',
+    page,
+  });
+  const items = rows.map((r) => {
+    const item = {
+      rank: r.rank,
+      url: r.canonical_url,
+      domain: r.domain,
+      title: r.title,
+      usage_commercial: r.usage_commercial,
+    };
+    return isAdmin(client) ? { ...item, id: num(r.id), score: num(r.score) } : item;
+  });
+  return { body: paged(items, total, page) };
+}
+
+const EXPORT_TYPES = { json: 'application/json', csv: 'text/csv', md: 'text/markdown' };
+
+export async function exportPool({ params, query: qs }) {
+  const format = enumParam(qs, 'format', FORMATS) ?? 'json';
+  let data;
+  try {
+    data = await loadPoolForExport(params.slug);
+  } catch (err) {
+    if (err.message.startsWith('Pool inconnu')) throw notFound(err.message);
+    throw err;
+  }
+  return {
+    raw: formatPool(data, format),
+    contentType: `${EXPORT_TYPES[format]}; charset=utf-8`,
+    filename: `${params.slug.replace(/[^\w.-]/g, '_')}.${format}`,
+  };
+}
+
+// --- Administration : corpus, taxonomie, domaines, frontière, runs.
+
+export async function adminStats() {
+  const [base, { rows: pools }, { rows: domains }, { rows: queries }] = await Promise.all([
+    stats(),
+    query('SELECT count(*)::int AS n FROM pool'),
+    query(
+      `SELECT count(*)::int AS total,
+              count(*) FILTER (WHERE usage_commercial IS NULL)::int AS to_qualify,
+              count(*) FILTER (WHERE explore_excluded)::int AS excluded
+         FROM domain_profile`,
+    ),
+    query('SELECT status, count(*)::int AS n FROM search_query GROUP BY status ORDER BY status'),
+  ]);
+  return { body: { ...base, pools: pools[0].n, domain_profile: domains[0], search_query: queries } };
+}
+
+export async function listUrls({ query: qs }) {
+  const page = pageParams(qs);
+  const status = enumParam(qs, 'status', URL_STATUSES);
+  const order = enumParam(qs, 'order', Object.keys(URL_ORDERS)) ?? 'recent';
+  const theme = qs.get('theme');
+  const domain = qs.get('domain');
+  const text = qs.get('q');
+  const facets = facetParams(qs);
+
+  const where = [];
+  const values = [];
+  const $ = (v) => `$${values.push(v)}`;
+  if (status) where.push(`ui.status = ${$(status)}`);
+  if (domain) where.push(`ui.domain = ${$(domain.toLowerCase())}`);
+  if (theme) {
+    where.push(
+      `EXISTS (SELECT 1 FROM url_theme ut JOIN theme t ON t.id = ut.theme_id
+                WHERE ut.url_item_id = ui.id AND t.slug = ${$(theme)})`,
+    );
+  }
+  for (const f of facets) {
+    where.push(
+      `EXISTS (SELECT 1 FROM url_facet_value fv JOIN facet_definition fd ON fd.id = fv.facet_id
+                WHERE fv.url_item_id = ui.id AND fd.slug = ${$(f.slug)} AND fv.value = ${$(f.value)})`,
+    );
+  }
+  if (text) {
+    const p = $(likePattern(text));
+    where.push(`(ui.title ILIKE ${p} OR coalesce(ui.canonical_url, ui.raw_url) ILIKE ${p})`);
+  }
+
+  const { rows, total } = await selectPage({
+    select: `ui.id, coalesce(ui.canonical_url, ui.raw_url) AS url, ui.domain, ui.title, ui.status,
+             ui.relevance_score, ui.quality_score, ui.confidence_score, ui.first_seen_at,
+             (SELECT t.slug FROM url_theme ut JOIN theme t ON t.id = ut.theme_id
+               WHERE ut.url_item_id = ui.id AND ut.is_primary) AS primary_theme`,
+    from: 'url_item ui',
+    where,
+    values,
+    order: URL_ORDERS[order],
+    page,
+  });
+  const items = rows.map((r) => ({
+    ...r,
+    id: num(r.id),
+    relevance_score: num(r.relevance_score),
+    quality_score: num(r.quality_score),
+    confidence_score: num(r.confidence_score),
+    first_seen_at: iso(r.first_seen_at),
+  }));
+  return { body: paged(items, total, page) };
+}
+
+export async function getUrl({ params }) {
+  const id = idParam(params.id);
+  const { rows } = await query(
+    `SELECT ui.id, ui.raw_url, ui.canonical_url, ui.domain, ui.title, ui.http_status, ui.status,
+            ui.duplicate_of, ui.error, ui.relevance_score, ui.confidence_score, ui.quality_score,
+            ui.first_seen_at, ui.normalized_at, ui.classified_at, dp.usage_commercial
+       FROM url_item ui LEFT JOIN domain_profile dp ON dp.domain = ui.domain
+      WHERE ui.id = $1`,
+    [id],
+  );
+  if (rows.length === 0) throw notFound(`URL inconnue : ${id}`);
+  const r = rows[0];
+  const [{ rows: sources }, { rows: themes }, { rows: facets }, { rows: pools }] = await Promise.all([
+    query(
+      `SELECT provider, query, serp_rank, discovered_at FROM url_source
+        WHERE url_item_id = $1 ORDER BY discovered_at, id`,
+      [id],
+    ),
+    query(
+      `SELECT t.slug, t.label, parent.slug AS parent, ut.is_primary, ut.score
+         FROM url_theme ut JOIN theme t ON t.id = ut.theme_id LEFT JOIN theme parent ON parent.id = t.parent_id
+        WHERE ut.url_item_id = $1 ORDER BY ut.is_primary DESC, ut.score DESC NULLS LAST, t.slug`,
+      [id],
+    ),
+    query(
+      `SELECT fd.slug, fd.label, fv.value
+         FROM url_facet_value fv JOIN facet_definition fd ON fd.id = fv.facet_id
+        WHERE fv.url_item_id = $1 ORDER BY fd.slug`,
+      [id],
+    ),
+    query(
+      `SELECT p.slug, pi.rank FROM pool_item pi JOIN pool p ON p.id = pi.pool_id
+        WHERE pi.url_item_id = $1 ORDER BY p.slug`,
+      [id],
+    ),
+  ]);
+  return {
+    body: {
+      ...r,
+      id: num(r.id),
+      duplicate_of: num(r.duplicate_of),
+      relevance_score: num(r.relevance_score),
+      confidence_score: num(r.confidence_score),
+      quality_score: num(r.quality_score),
+      first_seen_at: iso(r.first_seen_at),
+      normalized_at: iso(r.normalized_at),
+      classified_at: iso(r.classified_at),
+      sources: sources.map((s) => ({ ...s, discovered_at: iso(s.discovered_at) })),
+      themes: themes.map((t) => ({ ...t, score: num(t.score) })),
+      facets,
+      pools,
+    },
+  };
+}
+
+// Arbre de la taxonomie : `urls` compte les URLs rattachées, `primary_urls`
+// celles dont c'est le thème principal.
+export async function listThemes() {
+  const { rows } = await query(
+    `SELECT t.id, t.slug, t.label, t.parent_id,
+            count(ut.url_item_id)::int AS urls,
+            count(ut.url_item_id) FILTER (WHERE ut.is_primary)::int AS primary_urls
+       FROM theme t LEFT JOIN url_theme ut ON ut.theme_id = t.id
+      GROUP BY t.id ORDER BY t.id`,
+  );
+  const nodes = new Map(
+    rows.map((r) => [r.id, { slug: r.slug, label: r.label, urls: r.urls, primary_urls: r.primary_urls, children: [] }]),
+  );
+  const roots = [];
+  for (const r of rows) {
+    const parent = r.parent_id === null ? null : nodes.get(r.parent_id);
+    (parent ? parent.children : roots).push(nodes.get(r.id));
+  }
+  return { body: { items: roots } };
+}
+
+export async function listFacets() {
+  const { rows } = await query(
+    `SELECT fd.slug, fd.label, fv.value, count(fv.url_item_id)::int AS urls
+       FROM facet_definition fd LEFT JOIN url_facet_value fv ON fv.facet_id = fd.id
+      GROUP BY fd.id, fv.value ORDER BY fd.id, urls DESC, fv.value`,
+  );
+  const facets = new Map();
+  for (const r of rows) {
+    if (!facets.has(r.slug)) facets.set(r.slug, { slug: r.slug, label: r.label, values: [] });
+    if (r.value !== null) facets.get(r.slug).values.push({ value: r.value, urls: r.urls });
+  }
+  return { body: { items: [...facets.values()] } };
+}
+
+export async function listDomains({ query: qs }) {
+  const page = pageParams(qs);
+  const toQualify = boolParam(qs, 'to_qualify');
+  const excluded = boolParam(qs, 'excluded');
+  const usage = enumParam(qs, 'usage', USAGE_VALUES);
+  const text = qs.get('q');
+
+  const where = [];
+  const values = [];
+  const $ = (v) => `$${values.push(v)}`;
+  if (toQualify !== undefined) where.push(toQualify ? 'dp.usage_commercial IS NULL' : 'dp.usage_commercial IS NOT NULL');
+  if (excluded !== undefined) where.push(`dp.explore_excluded = ${$(excluded)}`);
+  if (usage) where.push(`dp.usage_commercial = ${$(usage)}`);
+  if (text) where.push(`dp.domain ILIKE ${$(likePattern(text.toLowerCase()))}`);
+
+  // Comme `webpool domain list` : seules les URLs normalisées ou classées comptent.
+  const { rows, total } = await selectPage({
+    select: `dp.domain, dp.usage_commercial, dp.note, dp.first_seen_at, dp.first_query, dp.reviewed_at,
+             dp.explore_excluded,
+             (SELECT count(*)::int FROM url_item ui
+               WHERE ui.domain = dp.domain AND ui.status IN ('normalized', 'classified')) AS urls`,
+    from: 'domain_profile dp',
+    where,
+    values,
+    order: 'urls DESC, dp.domain',
+    page,
+  });
+  const items = rows.map((r) => ({ ...r, first_seen_at: iso(r.first_seen_at), reviewed_at: iso(r.reviewed_at) }));
+  return { body: paged(items, total, page) };
+}
+
+export async function listSearchQueries({ query: qs }) {
+  const page = pageParams(qs);
+  const status = enumParam(qs, 'status', QUERY_STATUSES);
+  const provider = qs.get('provider');
+  const all = (await listQueries({ status })).filter((q) => !provider || q.provider === provider);
+  const items = all.slice(page.offset, page.offset + page.limit).map((q) => ({
+    id: q.id,
+    provider: q.provider,
+    query: q.query,
+    tags: q.tags,
+    status: q.status,
+    next_page: q.nextPage,
+    runs: q.runs,
+    dry_runs: q.dryRuns,
+    new_domains: q.newDomains,
+    // Infinity (requête jamais lancée) n'existe pas en JSON
+    priority: Number.isFinite(q.priority) ? q.priority : null,
+    last_run_at: iso(q.lastRunAt),
+    exhausted_at: iso(q.exhaustedAt),
+  }));
+  return { body: paged(items, all.length, page) };
+}
+
+export async function listRuns({ query: qs }) {
+  const page = pageParams(qs);
+  const kind = enumParam(qs, 'kind', RUN_KINDS);
+  const status = enumParam(qs, 'status', RUN_STATUSES);
+  const where = [];
+  const values = [];
+  const $ = (v) => `$${values.push(v)}`;
+  if (kind) where.push(`kind = ${$(kind)}`);
+  if (status) where.push(`status = ${$(status)}`);
+  const { rows, total } = await selectPage({
+    select: 'id, kind, status, detail, started_at, finished_at',
+    from: 'processing_run',
+    where,
+    values,
+    order: 'id DESC',
+    page,
+  });
+  const items = rows.map((r) => ({
+    ...r,
+    id: num(r.id),
+    started_at: iso(r.started_at),
+    finished_at: iso(r.finished_at),
+  }));
+  return { body: paged(items, total, page) };
+}

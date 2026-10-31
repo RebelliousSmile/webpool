@@ -144,7 +144,7 @@ if (ssh('command -v pg_dump >/dev/null && command -v psql >/dev/null && echo pre
 try {
   ssh(`DATABASE_URL="$(${node} -e 'process.loadEnvFile(process.argv[1]); process.stdout.write(process.env.DATABASE_URL)' "$HOME"/${target.envFile})" && psql "$DATABASE_URL" -XAtqc 'select 1' > /dev/null`);
 } catch (error) {
-  throw new Error(`Connexion à la base impossible avec la DATABASE_URL de ~/${target.envFile} :\n${String(error.stderr ?? '').trim()}`);
+  throw new Error(`Connexion à la base impossible avec la DATABASE_URL de ~/${target.envFile} :\n${String(error.stderr ?? '').trim()}`, { cause: error });
 }
 const appExists = ssh(`test -d ${target.appDir} && echo present || echo absent`).trim() === 'present';
 const lastRaw = ssh(`cat ${target.stateDir}/last-deploy.json 2>/dev/null || true`).trim();

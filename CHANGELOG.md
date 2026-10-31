@@ -3,6 +3,22 @@
 Toutes les évolutions notables de ce projet sont consignées ici.
 Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions [SemVer](https://semver.org/lang/fr/).
 
+## [Unreleased]
+
+### Added
+
+- API HTTP en lecture seule : `webpool serve`, routes `/api/v1` (pools, corpus, taxonomie, domaines, frontière, runs, export), contrat `openapi.json`.
+- ESLint (`pnpm lint`) et couverture des deux suites réunies (`pnpm test:coverage`, planchers), exécutés par la CI.
+- Clients de l'API par jeton (`webpool client add|list|revoke|grant|ungrant`), migration `005_api_client` : scope `admin` ou `read` limité aux pools accordés.
+- Exploration par tuyaux : les requêtes étiquetées `flot:<slug>` forment un tuyau, `explore` ne lance que le tuyau courant et le quitte quand sa pression (domaines nouveaux bien notés par appel jugé) tombe sous `WEBPOOL_PIPE_DROP_RATIO` × sa référence ou qu'il n'a plus de requête active ; `webpool pipe list` ; migrations `006_domain_run` et `007_explore_pipe`.
+- `query import` ajoute aux requêtes déjà connues les étiquettes qui leur manquent ; exemples étiquetés `flot:<nom>`.
+
+### Fixed
+
+- Test des critères `recent` : la regex contenait un caractère de contrôle au lieu de `\b` et ne vérifiait rien.
+- Une variable `PORT` invalide n'arrête plus les commandes quand `WEBPOOL_API_PORT` est défini.
+- Erreurs de repli de provider et de connexion au déploiement : cause d'origine conservée (`cause`).
+
 ## [v0.1.0] - 2026-10-30
 
 ### Added

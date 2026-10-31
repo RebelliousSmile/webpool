@@ -12,6 +12,8 @@ import { stats } from '../src/stats.js';
 import { assertUsage, listDomains, qualifyDomain, setExploreExcluded } from '../src/domains/index.js';
 import { addQuery, explore, importQueries, listPipes, listQueries, parseTags } from '../src/explore/index.js';
 import { cycle } from '../src/cycle/index.js';
+import { addClient, listClients, revokeClient, setPoolAccess } from '../src/api/clients.js';
+import { config } from '../src/config.js';
 
 const HELP = `webpool — pipeline d'URLs : ingestion, normalisation, classification, pools
 
@@ -34,6 +36,12 @@ Usage :
   webpool pipe list                        (tuyaux flot:<slug> : requêtes actives, pression et référence de la dernière visite)
   webpool explore --budget N [--provider p] [--limit N]   (au plus N appels aux providers, ceux du tuyau courant d'abord)
   webpool cycle --budget N [--provider p] [--offline]   (explore, normalize et classify jusqu'à vider la file, refresh des pools)
+  webpool serve [--port N] [--host h]   (API HTTP en lecture seule, voir openapi.json)
+  webpool client add --name <nom> [--scope admin|read]   (affiche le jeton une seule fois)
+  webpool client list
+  webpool client revoke --name <nom>
+  webpool client grant --name <nom> --slug <pool>   (client read : accès au pool)
+  webpool client ungrant --name <nom> --slug <pool>
   webpool stats
   webpool migrate                         (applique les migrations db/migrations manquantes)
 `;
@@ -58,6 +66,10 @@ const OPTIONS = {
   tags: { type: 'string' },
   status: { type: 'string' },
   budget: { type: 'string' },
+  name: { type: 'string' },
+  scope: { type: 'string', default: 'read' },
+  port: { type: 'string' },
+  host: { type: 'string' },
   help: { type: 'boolean', short: 'h', default: false },
 };
 
@@ -231,6 +243,41 @@ async function main() {
       const res = await cycle({ budget, provider: values.provider, offline: values.offline, exploreOptions: { limit } });
       for (const s of res.steps) console.log(`${s.name.padEnd(9)} ${s.ok ? 'ok    ' : 'ÉCHEC '} ${s.line}`);
       if (!res.ok) process.exitCode = 1;
+      break;
+    }
+    case 'serve': {
+      const port = parsePositive('port', values.port) ?? config.apiPort;
+      // import différé : le serveur n'est chargé que pour cette commande
+      const { serve } = await import('../src/api/index.js');
+      await serve({ port, host: values.host ?? config.apiHost, corsOrigins: config.apiCorsOrigins });
+      break;
+    }
+    case 'client': {
+      if (subcommand === 'add') {
+        if (!values.name) throw new Error('client add : --name requis');
+        const res = await addClient({ name: values.name, scope: values.scope });
+        console.log(`Client "${res.name}" (${res.scope}) créé. Jeton, affiché une seule fois :\n${res.token}`);
+      } else if (subcommand === 'list') {
+        const rows = await listClients();
+        for (const c of rows) {
+          const state = c.revoked_at ? `révoqué le ${c.revoked_at.toISOString().slice(0, 10)}` : 'actif';
+          console.log(
+            `${c.name.padEnd(20)} ${c.scope.padEnd(5)}  ${state}${c.scope === 'read' ? `  pools : ${c.pools.join(', ') || '(aucun)'}` : ''}`,
+          );
+        }
+        if (rows.length === 0) console.log('(aucun client)');
+      } else if (subcommand === 'revoke') {
+        if (!values.name) throw new Error('client revoke : --name requis');
+        await revokeClient({ name: values.name });
+        console.log(`Client "${values.name}" révoqué.`);
+      } else if (subcommand === 'grant' || subcommand === 'ungrant') {
+        if (!values.name || !values.slug) throw new Error(`client ${subcommand} : --name et --slug requis`);
+        const granted = subcommand === 'grant';
+        await setPoolAccess({ name: values.name, slug: values.slug, granted });
+        console.log(`Pool "${values.slug}" ${granted ? 'accordé à' : 'retiré à'} "${values.name}".`);
+      } else {
+        throw new Error(`Sous-commande client inconnue : ${subcommand ?? '(aucune)'}`);
+      }
       break;
     }
     case 'migrate': {

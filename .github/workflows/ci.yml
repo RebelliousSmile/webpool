@@ -36,7 +36,8 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
-      - run: pnpm test:integration
+      - run: pnpm lint
+      # unitaires + intégration, couverture avec planchers
+      - run: pnpm test:coverage
         env:
           DATABASE_URL: postgres://webpool:webpool@localhost:5432/webpool
