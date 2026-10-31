@@ -1220,6 +1220,169 @@
           }
         }
       }
+    },
+    "/communities/{slug}/members": {
+      "get": {
+        "summary": "Membres de la communauté, rôle, plafond et dépense sur 30 jours (propriétaires seulement)",
+        "tags": [
+          "recherches"
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CommunityMember"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/communities/{slug}/members/{name}": {
+      "put": {
+        "summary": "Ajoute un membre ou change son rôle et son plafond (propriétaires seulement ; la communauté garde un propriétaire actif)",
+        "tags": [
+          "recherches"
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "nom du client",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommunityMemberInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityMemberSet"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Retire un membre (propriétaires seulement ; la communauté garde un propriétaire actif)",
+        "tags": [
+          "recherches"
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "description": "nom du client",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "community",
+                    "name"
+                  ],
+                  "properties": {
+                    "community": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1379,6 +1542,7 @@
         "required": [
           "slug",
           "label",
+          "public",
           "refreshed_at",
           "items"
         ],
@@ -1398,6 +1562,10 @@
           },
           "items": {
             "type": "integer"
+          },
+          "public": {
+            "type": "boolean",
+            "description": "pool public : visible par tout client authentifié"
           }
         }
       },
@@ -1406,6 +1574,7 @@
         "required": [
           "slug",
           "label",
+          "public",
           "refreshed_at",
           "items",
           "top_domains",
@@ -1478,6 +1647,10 @@
           "definition": {
             "type": "object",
             "description": "admin uniquement : définition réexécutable du pool"
+          },
+          "public": {
+            "type": "boolean",
+            "description": "pool public : visible par tout client authentifié"
           }
         }
       },
@@ -2609,6 +2782,95 @@
           },
           "refunded": {
             "type": "integer"
+          }
+        }
+      },
+      "CommunityMember": {
+        "type": "object",
+        "required": [
+          "name",
+          "role",
+          "monthly_limit",
+          "spent_30d",
+          "revoked",
+          "joined_at"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "member"
+            ]
+          },
+          "monthly_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "plafond en giri sur 30 jours glissants, null : sans plafond"
+          },
+          "spent_30d": {
+            "type": "integer"
+          },
+          "revoked": {
+            "type": "boolean",
+            "description": "client révoqué"
+          },
+          "joined_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CommunityMemberInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "member"
+            ]
+          },
+          "monthly_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "null ou absent : sans plafond"
+          }
+        },
+        "description": "Upsert partiel : un champ absent garde sa valeur (nouveau membre : `member`, sans plafond) ; `monthly_limit: null` lève le plafond, 0 bloque la dépense."
+      },
+      "CommunityMemberSet": {
+        "type": "object",
+        "required": [
+          "community",
+          "name",
+          "role",
+          "monthly_limit"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "monthly_limit": {
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         }
       }

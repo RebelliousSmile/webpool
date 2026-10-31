@@ -4,7 +4,8 @@
 // planifiée) l'exécute, rembourse ce qui n'a pas été appelé, puis normalise,
 // classe et rafraîchit les pools visés.
 import { config } from '../config.js';
-import { getPool, query, withTransaction } from '../db.js';
+import { query, withTransaction } from '../db.js';
+import { withPipelineLock } from '../lock.js';
 import { withRun } from '../run.js';
 import { ingest } from '../ingest/index.js';
 import { exclusionFor, loadSaturated } from '../explore/index.js';
@@ -17,9 +18,6 @@ import { BillingError, currentPrices, ensureWallet, postEntry, spentLast30Days }
 import { callCostUsd, checkRequest, parseCallCosts } from '../billing/pricing.js';
 
 export const REQUEST_STATUSES = ['queued', 'running', 'done', 'failed', 'cancelled'];
-
-// Verrou consultatif : deux `requests run` ne s'exécutent jamais en même temps.
-const RUN_LOCK = 7_765_726_571;
 
 const REQUEST_COLUMNS = `sr.id, sr.provider, sr.query, sr.pages, sr.unit_price, sr.price, sr.refunded, sr.status,
   sr.calls_done, sr.results, sr.new_urls, sr.new_domains, sr.in_pool, sr.error,
@@ -61,12 +59,12 @@ async function loadRequest(db, id) {
   return formatRequest(rows[0]);
 }
 
-// Pool visible par le client : admin, accord direct, ou pool d'une de ses communautés.
+// Pool visible par le client : admin, pool public, accord direct, ou pool d'une de ses communautés.
 async function visiblePoolId(db, { clientId, isAdmin, slug }) {
   const { rows } = await db.query(
     `SELECT p.id FROM pool p
       WHERE p.slug = $1
-        AND ($2
+        AND ($2 OR p.public
              OR EXISTS (SELECT 1 FROM api_client_pool cp WHERE cp.pool_id = p.id AND cp.api_client_id = $3)
              OR EXISTS (SELECT 1 FROM community_pool cp JOIN community_member cm ON cm.community_id = cp.community_id
                          WHERE cp.pool_id = p.id AND cm.api_client_id = $3))`,
@@ -267,23 +265,9 @@ async function execute(r, { saturated, ingestImpl, estimate, maxChars }) {
   });
 }
 
-async function withRunLock(fn) {
-  const client = await getPool().connect();
-  try {
-    const { rows } = await client.query('SELECT pg_try_advisory_lock($1) AS ok', [RUN_LOCK]);
-    if (!rows[0].ok) return null;
-    try {
-      return await fn();
-    } finally {
-      await client.query('SELECT pg_advisory_unlock($1)', [RUN_LOCK]).catch(() => {});
-    }
-  } finally {
-    client.release();
-  }
-}
-
 // Tâche planifiée : exécute jusqu'à `limit` recherches en attente, puis traite
-// leurs URLs et rafraîchit les pools visés. null si un autre run tourne.
+// leurs URLs et rafraîchit les pools visés. null si un autre `requests run`
+// ou un `cycle` tient le verrou du pipeline.
 export async function runRequests({
   limit = 10,
   offline = false,
@@ -292,7 +276,7 @@ export async function runRequests({
   ingestImpl = ingest,
   cfg = config,
 } = {}) {
-  return withRunLock(async () => {
+  return withPipelineLock(async () => {
     const recovered = await recoverStale(staleMinutes);
     const claimed = await claim(limit);
     if (claimed.length === 0) return { recovered, requests: [], pools: [] };

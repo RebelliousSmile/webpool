@@ -9,6 +9,10 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions [Sem
 
 - Recherches payantes : les pools restent gratuits, une recherche se paie d'avance en giri (1 € = 1 000 giri), sur le portefeuille d'un client (don) ou d'une communauté (achat). Prix d'un appel = coût du provider majoré (`WEBPOOL_PRICE_MARKUP`), pages non lancées et appels en échec remboursés. Communautés (`webpool community`), membres avec plafond sur 30 jours, pools visibles par les membres ; grand livre (`webpool wallet credit|adjust|show`, référence de paiement unique) ; `webpool pricing`, `webpool requests run|list|cancel`, `webpool billing report` ; critère de pool `include_requests` ; coût réel des appels OpenRouter (`usage.cost`) ; migration `009_billing`.
 - API : `GET /billing`, `GET /billing/entries`, `GET|POST /requests`, `DELETE /requests/{id}`, `GET /admin/requests` ; corps JSON borné à 8 Ko, prévol CORS par chemin (`POST`, `DELETE`, en-tête `Content-Type`).
+- Pools publics (`webpool pool publish|unpublish`, champ `public`) : visibles et exportables par tout client sans accord.
+- Membres d'une communauté gérés par ses propriétaires : `GET /communities/{slug}/members`, `PUT|DELETE /communities/{slug}/members/{name}` ; la communauté garde un propriétaire actif.
+- Crédit minimal (`WEBPOOL_MIN_CREDIT_CENTS`, 2 € ; `wallet credit --force`), encours des giri non dépensés dans `billing report`.
+- Verrou du pipeline partagé par `cycle` et `requests run` (`src/lock.js`) : jamais deux normalisations de la même file en même temps.
 
 - Export des pools ouvert aux clients `read` (`GET /api/v1/pools/{slug}/export`), sans définition ni score ; format `txt` (une URL par ligne) pour l'API et `pool export` ; usage commercial dans le corpus (`/admin/urls`).
 - Déploiement de l'API : site Node.js alwaysdata (`webpool serve`), redémarré après la bascule (API alwaysdata avec `ALWAYSDATA_API_TOKEN` local et `apiSiteId`, sinon consigne), contrôle de `/health` qui renvoie la version et le commit livré (`REVISION`) ; cache de médias créé et `WEBPOOL_MEDIA_DIR` vérifié ; opération `deploy:api` au contrat.

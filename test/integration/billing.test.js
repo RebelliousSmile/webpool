@@ -85,7 +85,10 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
     await billing.setMember({ community: 'atelier', name: 'alice', role: 'owner' });
     await billing.setMember({ community: 'atelier', name: 'bob', monthlyLimit: 15 });
     await billing.setCommunityPool({ community: 'atelier', pool: 'lora', attached: true });
-    await expect(billing.setMember({ community: 'atelier', name: 'bob', role: 'roi' })).rejects.toThrow('--role invalide');
+    await expect(billing.setMember({ community: 'atelier', name: 'bob', role: 'roi' })).rejects.toThrow('role invalide');
+    await expect(billing.setMember({ community: 'atelier', name: 'bob', monthlyLimit: -1 })).rejects.toThrow('plafond mensuel');
+    // relancer sans --role ni --monthly ne change rien
+    expect(await billing.setMember({ community: 'atelier', name: 'bob' })).toMatchObject({ role: 'member', monthlyLimit: 15 });
     await expect(billing.setMember({ community: 'nulle', name: 'bob' })).rejects.toThrow('Communauté inconnue');
     await expect(billing.setCommunityPool({ community: 'atelier', pool: 'nope', attached: true })).rejects.toThrow('Pool inconnu');
     await expect(billing.removeMember({ community: 'atelier', name: 'carol' })).rejects.toThrow("n'est pas membre");
@@ -102,11 +105,13 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
   });
 
   it('crédit : don sur un client, achat sur une communauté, un paiement crédité une fois', async () => {
-    expect(await billing.credit({ name: 'carol', cents: 100, reference: 'liberapay:1' })).toEqual({ giri: 1000, balance: 1000, kind: 'donation' });
-    await expect(billing.credit({ name: 'carol', cents: 100, reference: 'liberapay:1' })).rejects.toThrow('Paiement déjà crédité');
+    // Sous 2 €, les frais fixes du paiement dépassent la marge : refus sans --force.
+    await expect(billing.credit({ name: 'carol', cents: 100, reference: 'liberapay:1' })).rejects.toThrow('sous le minimum de 2.00 €');
+    expect(await billing.credit({ name: 'carol', cents: 100, reference: 'liberapay:1', force: true })).toEqual({ giri: 1000, balance: 1000, kind: 'donation' });
+    await expect(billing.credit({ name: 'carol', cents: 100, reference: 'liberapay:1', force: true })).rejects.toThrow('Paiement déjà crédité');
     await expect(billing.credit({ name: 'carol', cents: 100 })).rejects.toThrow('--ref requis');
     await expect(billing.credit({ name: 'carol', community: 'atelier', cents: 100, reference: 'x' })).rejects.toThrow('pas les deux');
-    expect(await billing.credit({ community: 'atelier', cents: 5, reference: 'virement:7' })).toMatchObject({ giri: 50, kind: 'purchase' });
+    expect(await billing.credit({ community: 'atelier', cents: 5, reference: 'virement:7', force: true })).toMatchObject({ giri: 50, kind: 'purchase' });
     await expect(billing.adjust({ name: 'dave', giri: -1, note: 'test' })).rejects.toThrow('Solde insuffisant');
     await expect(billing.adjust({ name: 'dave', giri: 5 })).rejects.toThrow('--note requis');
     await expectLedgerConsistent();
@@ -206,6 +211,19 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
     await expectLedgerConsistent();
   });
 
+  it("include_requests : une recherche personnelle n'injecte rien dans le pool", async () => {
+    const input = writeTempJson('perso.json', [{ url: 'https://flickr.com/photos/forest-2', title: 'Forest photo two' }]);
+    const r = await requests.createRequest({ clientId: who.carol.id, prices: PRICES, provider: 'brave', query: 'perso', pool: 'lora' });
+    await requests.runRequests({ offline: true, ingestImpl: (args) => ingest({ ...args, provider: 'file', input }) });
+    const { items } = await requests.listRequests({ clientId: who.carol.id });
+    expect(items.find((i) => i.id === r.request.id)).toMatchObject({ status: 'done', new_urls: 1, in_pool: 0 });
+    const { rows } = await db.query(
+      `SELECT 1 FROM pool_item pi JOIN pool p ON p.id = pi.pool_id JOIN url_item ui ON ui.id = pi.url_item_id
+        WHERE p.slug = 'lora' AND ui.domain = 'flickr.com'`,
+    );
+    expect(rows).toHaveLength(0);
+  });
+
   it('rapport : crédits, giri dépensés nets, coût et marge par provider', async () => {
     const report = await billing.billingReport({ days: 30, usdEur: 1, giriPerEur: 1000 });
     expect(report.credits).toEqual([
@@ -213,9 +231,14 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
       { kind: 'purchase', entries: 1, giri: 50, eur: 0.05 },
     ]);
     const brave = report.providers.find((p) => p.provider === 'brave');
-    // bob : 10 giri, forest : 20 gardés, crash : 10 ; panne remboursée ; annulées sans appel
-    expect(brave).toMatchObject({ giri: 40, calls: 4 });
-    expect(brave.margin_eur).toBeCloseTo(0.04 - brave.cost_usd, 6);
+    // bob : 10 giri, forest : 20 gardés, crash : 10, perso : 10 ; panne remboursée ; annulées sans appel
+    expect(brave).toMatchObject({ giri: 50, calls: 5 });
+    expect(brave.margin_eur).toBeCloseTo(0.05 - brave.cost_usd, 6);
+    // Encours : tout ce qui reste sur les portefeuilles, dû en recherches.
+    const { rows } = await db.query(
+      `SELECT sum(balance) FILTER (WHERE api_client_id IS NOT NULL)::int AS p, sum(balance) FILTER (WHERE community_id IS NOT NULL)::int AS c FROM wallet`,
+    );
+    expect(report.outstanding).toEqual({ personal: rows[0].p, communities: rows[0].c, eur: (rows[0].p + rows[0].c) / 1000 });
   });
 
   describe('API', () => {
@@ -231,7 +254,7 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
     });
 
     it('POST /requests : 201 payée, 402 sans giri, 400 champ inconnu, 415 hors JSON', async () => {
-      await billing.credit({ name: 'dave', cents: 2, reference: 'ko-fi:9' });
+      await billing.credit({ name: 'dave', cents: 2, reference: 'ko-fi:9', force: true });
       const ok = await call('POST', '/requests', who.dave, { provider: 'brave', query: 'nagasaki' });
       expect(ok.status).toBe(201);
       expect(ok.body.request).toMatchObject({ status: 'queued', provider: 'brave', client: 'dave' });
@@ -278,5 +301,61 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
       expect(all.body.items.map((r) => r.query)).toEqual(['panne']);
       await expectLedgerConsistent();
     });
+
+    it('pool public : visible, exportable et ciblable par tout client, sans accord', async () => {
+      const pools = await import('../../src/pools/index.js');
+      expect((await call('GET', '/pools/autre', who.dave)).status).toBe(404);
+      await pools.setPoolPublic('autre', true);
+      expect((await call('GET', '/pools', who.dave)).body.items.map((p) => [p.slug, p.public])).toEqual([['autre', true]]);
+      expect((await call('GET', '/pools/autre', who.dave)).body).toMatchObject({ slug: 'autre', public: true });
+      const res = await requests.createRequest({ clientId: who.dave.id, prices: PRICES, provider: 'brave', query: 'q', pool: 'autre' });
+      expect(res.request.pool).toBe('autre');
+      await requests.cancelRequest({ id: res.request.id, clientId: who.dave.id });
+      await pools.setPoolPublic('autre', false);
+      expect((await call('GET', '/pools/autre', who.dave)).status).toBe(404);
+      await expect(pools.setPoolPublic('nope', true)).rejects.toThrow('Pool inconnu');
+    });
+
+    it('membres gérés par les propriétaires, qui gardent toujours un propriétaire', async () => {
+      expect((await call('GET', '/communities/atelier/members', who.bob)).status).toBe(404);
+      const list = await call('GET', '/communities/atelier/members', who.alice);
+      expect(list.body.items.map((m) => [m.name, m.role, m.monthly_limit, m.spent_30d])).toEqual([
+        ['alice', 'owner', null, 0],
+        ['bob', 'member', 15, 10],
+      ]);
+      expect((await call('PUT', '/communities/atelier/members/dave', who.bob, {})).status).toBe(404);
+      const added = await call('PUT', '/communities/atelier/members/dave', who.alice, { monthly_limit: 100 });
+      expect(added.body).toEqual({ community: 'atelier', name: 'dave', role: 'member', monthly_limit: 100 });
+      expect((await call('PUT', '/communities/atelier/members/personne', who.alice, {})).status).toBe(404);
+      expect((await call('PUT', '/communities/atelier/members/dave', who.alice, { monthly_limit: -1 })).status).toBe(400);
+      expect((await call('PUT', '/communities/atelier/members/dave', who.alice, { quota: 1 })).status).toBe(400);
+      // dernier propriétaire : ni rétrogradé ni retiré
+      const demote = await call('PUT', '/communities/atelier/members/alice', who.alice, { role: 'member' });
+      expect(demote).toMatchObject({ status: 400, body: { error: { message: expect.stringContaining('au moins un propriétaire') } } });
+      expect((await call('DELETE', '/communities/atelier/members/alice', who.alice)).status).toBe(400);
+      // upsert partiel : changer le rôle garde le plafond ; null le lève
+      const promoted = await call('PUT', '/communities/atelier/members/dave', who.alice, { role: 'owner' });
+      expect(promoted.body).toMatchObject({ role: 'owner', monthly_limit: 100 });
+      expect((await call('PUT', '/communities/atelier/members/dave', who.alice, { monthly_limit: null })).body)
+        .toMatchObject({ role: 'owner', monthly_limit: null });
+      expect((await call('DELETE', '/communities/atelier/members/alice', who.alice)).status).toBe(200);
+      expect((await call('GET', '/communities/atelier/members', who.alice)).status).toBe(404);
+      expect((await call('DELETE', '/communities/atelier/members/alice', who.dave)).status).toBe(404);
+    });
+  });
+
+  it('le grand livre survit : un client ou une communauté avec portefeuille ne se supprime pas', async () => {
+    await expect(db.query(`DELETE FROM api_client WHERE name = 'carol'`)).rejects.toThrow(/violates foreign key/);
+    await expect(db.query(`DELETE FROM community WHERE slug = 'atelier'`)).rejects.toThrow(/violates foreign key/);
+  });
+
+  it('verrou du pipeline : requests run passe son tour pendant un cycle', async () => {
+    const { withPipelineLock } = await import('../../src/lock.js');
+    let inner;
+    await withPipelineLock(async () => {
+      inner = await requests.runRequests({ offline: true });
+    });
+    expect(inner).toBeNull();
+    expect(await requests.runRequests({ offline: true })).toMatchObject({ requests: [] });
   });
 });

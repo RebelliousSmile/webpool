@@ -12,7 +12,7 @@
 //   "domains_include": [],               // si non vide : liste blanche
 //   "order": "quality",                  // quality | relevance | recent | composite | rarity
 //   "limit": 50,
-//   "include_requests": true             // + URLs classées des recherches payantes qui visent ce pool
+//   "include_requests": true             // + URLs des recherches de ses communautés, hors critères de sujet
 // }
 
 // Rareté : 1 / sqrt(URLs vivantes du domaine) ; une URL d'un domaine unique vaut 1.
@@ -81,8 +81,10 @@ function validateDefinition(definition) {
 }
 
 // `poolId` sert au critère include_requests : une URL trouvée par une recherche
-// payante qui vise ce pool y entre dès qu'elle est classée, sans remplir les
-// autres critères ; domains_exclude s'applique toujours.
+// payée par une communauté propriétaire du pool, et qui le vise, y entre dès
+// qu'elle est classée, sans remplir les
+// critères de sujet (theme, subthemes, facets, domains_include) ; les seuils
+// min_relevance et min_quality et domains_exclude s'appliquent toujours.
 export function buildPoolQuery(definition, { poolId = null } = {}) {
   validateDefinition(definition);
   const order = definition.order ?? 'composite';
@@ -115,20 +117,26 @@ export function buildPoolQuery(definition, { poolId = null } = {}) {
                WHERE ufv.url_item_id = ui.id AND fd.slug = ${add(facetSlug)} AND ufv.value = ${add(value)})`,
     );
   }
-  if (definition.min_relevance != null) {
-    where.push(`ui.relevance_score >= ${add(definition.min_relevance)}`);
-  }
-  if (definition.min_quality != null) {
-    where.push(`ui.quality_score >= ${add(definition.min_quality)}`);
-  }
   if (definition.domains_include?.length) {
     where.push(`ui.domain = ANY(${add(definition.domains_include)})`);
   }
-  const conditions = ["ui.status = 'classified'"];
+  // Seuils de qualité : jamais contournés, même par include_requests.
+  const thresholds = [];
+  if (definition.min_relevance != null) {
+    thresholds.push(`ui.relevance_score >= ${add(definition.min_relevance)}`);
+  }
+  if (definition.min_quality != null) {
+    thresholds.push(`ui.quality_score >= ${add(definition.min_quality)}`);
+  }
+  const conditions = ["ui.status = 'classified'", ...thresholds];
   // Sans autre critère, le pool prend déjà toutes les URLs classées.
   if (definition.include_requests && poolId !== null && where.length) {
+    // Seules comptent les recherches payées par une communauté propriétaire du
+    // pool : un client qui paie sur son portefeuille personnel n'y injecte rien.
     const requested =
       `EXISTS (SELECT 1 FROM url_source us JOIN search_request sr ON sr.id = us.search_request_id\n` +
+      `               JOIN wallet w ON w.id = sr.wallet_id\n` +
+      `               JOIN community_pool cp ON cp.community_id = w.community_id AND cp.pool_id = sr.pool_id\n` +
       `               WHERE us.url_item_id = ui.id AND sr.pool_id = ${add(poolId)})`;
     conditions.push(`((${where.join('\n   AND ')})\n   OR ${requested})`);
   } else {

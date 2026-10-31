@@ -7,6 +7,7 @@ import { normalizePending } from '../normalize/index.js';
 import { classifyPending } from '../classify/index.js';
 import { cacheMedia } from '../media/index.js';
 import { listPools, refreshPool } from '../pools/index.js';
+import { withPipelineLock } from '../lock.js';
 
 const message = (err) => String(err?.message ?? err);
 
@@ -32,7 +33,13 @@ async function runStep(name, fn) {
   }
 }
 
-export async function cycle({ budget, provider, offline = false, batch = 100, exploreOptions = {} }) {
+// Sous le verrou du pipeline, partagé avec `requests run` : le cycle attend
+// qu'une exécution de recherches payées se termine.
+export function cycle(options) {
+  return withPipelineLock(() => runCycle(options), { wait: true });
+}
+
+async function runCycle({ budget, provider, offline = false, batch = 100, exploreOptions = {} }) {
   const steps = [];
 
   steps.push(

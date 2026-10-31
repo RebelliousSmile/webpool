@@ -72,16 +72,34 @@ async function ids({ name, community, pool }) {
   return { clientId: r.client_id, communityId: r.community_id, poolId: r.pool_id };
 }
 
-// Ajoute un membre, ou change son rôle et son plafond s'il l'est déjà.
-export async function setMember({ community, name, role = 'member', monthlyLimit = null }) {
-  if (!ROLES.includes(role)) throw new BillingError('invalid', `--role invalide : "${role}" (attendu : ${ROLES.join(', ')})`);
+// Upsert partiel d'un membre : un champ `undefined` garde sa valeur (rôle
+// `member` et sans plafond pour un nouveau membre) ; `monthlyLimit: null` lève
+// le plafond, 0 bloque toute dépense.
+const UPSERT_MEMBER = `
+  INSERT INTO community_member (community_id, api_client_id, role, monthly_limit)
+  VALUES ($1, $2, coalesce($3, 'member'), $4)
+  ON CONFLICT (community_id, api_client_id) DO UPDATE
+     SET role = coalesce($3, community_member.role),
+         monthly_limit = CASE WHEN $5 THEN $4 ELSE community_member.monthly_limit END
+  RETURNING role, monthly_limit`;
+
+function checkMemberFields(role, monthlyLimit) {
+  if (role !== undefined && !ROLES.includes(role)) {
+    throw new BillingError('invalid', `role invalide : "${role}" (attendu : ${ROLES.join(', ')})`);
+  }
+  if (monthlyLimit !== undefined && monthlyLimit !== null && (!Number.isInteger(monthlyLimit) || monthlyLimit < 0)) {
+    throw new BillingError('invalid', 'plafond mensuel : entier ≥ 0, ou null (sans plafond)');
+  }
+}
+
+const memberRow = (r) => ({ role: r.role, monthlyLimit: r.monthly_limit === null ? null : Number(r.monthly_limit) });
+
+// Ajoute un membre, ou change son rôle ou son plafond s'il l'est déjà (admin).
+export async function setMember({ community, name, role, monthlyLimit }) {
+  checkMemberFields(role, monthlyLimit);
   const { clientId, communityId } = await ids({ name, community });
-  await query(
-    `INSERT INTO community_member (community_id, api_client_id, role, monthly_limit) VALUES ($1, $2, $3, $4)
-     ON CONFLICT (community_id, api_client_id) DO UPDATE SET role = EXCLUDED.role, monthly_limit = EXCLUDED.monthly_limit`,
-    [communityId, clientId, role, monthlyLimit],
-  );
-  return { community, name, role, monthlyLimit };
+  const { rows } = await query(UPSERT_MEMBER, [communityId, clientId, role ?? null, monthlyLimit ?? null, monthlyLimit !== undefined]);
+  return { community, name, ...memberRow(rows[0]) };
 }
 
 export async function removeMember({ community, name }) {
@@ -139,11 +157,18 @@ async function ownerIds({ name, community }) {
 // Don (portefeuille d'un client) ou achat (portefeuille d'une communauté),
 // saisi par l'admin à réception du paiement. `reference` identifie ce
 // paiement : le même n'est jamais crédité deux fois.
-export async function credit({ name, community, cents, reference, note = null, giriPerEur = config.giriPerEur }) {
+// Sous `minCents`, les frais fixes du paiement dépassent la marge : refus,
+// sauf `force` (paiement déjà reçu, à créditer quand même).
+export async function credit({
+  name, community, cents, reference, note = null, giriPerEur = config.giriPerEur, minCents = config.minCreditCents, force = false,
+}) {
   if (!reference?.trim()) throw new BillingError('invalid', '--ref requis : référence du paiement reçu (ex. liberapay:1234)');
+  const { clientId, communityId } = await ownerIds({ name, community });
+  if (cents < minCents && !force) {
+    throw new BillingError('invalid', `Montant sous le minimum de ${(minCents / 100).toFixed(2)} € (frais de paiement) : --force pour créditer quand même`);
+  }
   const giri = giriFromCents(cents, giriPerEur);
   if (giri < 1) throw new BillingError('invalid', 'Montant trop faible pour un giri');
-  const { clientId, communityId } = await ownerIds({ name, community });
   return withTransaction(async (db) => {
     const { rows: dup } = await db.query('SELECT 1 FROM wallet_entry WHERE reference = $1', [reference.trim()]);
     if (dup.length) throw new BillingError('invalid', `Paiement déjà crédité : ${reference.trim()}`);
@@ -240,7 +265,7 @@ export async function walletsFor(clientId) {
 // Recettes et dépenses sur `days` jours : giri crédités (et €), giri dépensés
 // net des remboursements, coût des providers, par provider.
 export async function billingReport({ days = 30, usdEur = config.usdEur, giriPerEur = config.giriPerEur } = {}) {
-  const [{ rows: credits }, { rows: byProvider }] = await Promise.all([
+  const [{ rows: credits }, { rows: byProvider }, { rows: outstanding }] = await Promise.all([
     query(
       `SELECT kind, count(*)::int AS entries, sum(delta)::bigint AS giri, coalesce(sum(amount_cents), 0)::bigint AS cents
          FROM wallet_entry WHERE kind IN ('donation', 'purchase') AND created_at > now() - make_interval(days => $1)
@@ -253,6 +278,12 @@ export async function billingReport({ days = 30, usdEur = config.usdEur, giriPer
          FROM search_request WHERE created_at > now() - make_interval(days => $1) AND status <> 'queued'
         GROUP BY provider ORDER BY provider`,
       [days],
+    ),
+    // Encours : giri crédités et pas encore dépensés, dus en recherches (ils n'expirent pas).
+    query(
+      `SELECT coalesce(sum(balance) FILTER (WHERE api_client_id IS NOT NULL), 0)::bigint AS personal,
+              coalesce(sum(balance) FILTER (WHERE community_id IS NOT NULL), 0)::bigint AS communities
+         FROM wallet`,
     ),
   ]);
   const providersOut = byProvider.map((r) => {
@@ -268,9 +299,90 @@ export async function billingReport({ days = 30, usdEur = config.usdEur, giriPer
       margin_eur: revenueEur - costEur,
     };
   });
+  const owed = { personal: Number(outstanding[0].personal), communities: Number(outstanding[0].communities) };
   return {
     days,
+    outstanding: { ...owed, eur: (owed.personal + owed.communities) / giriPerEur },
     credits: credits.map((c) => ({ kind: c.kind, entries: c.entries, giri: Number(c.giri), eur: Number(c.cents) / 100 })),
     providers: providersOut,
   };
+}
+
+// --- Gestion d'une communauté par ses propriétaires (API)
+
+// Communauté dont `clientId` est propriétaire ; sinon introuvable (son existence
+// n'est pas révélée aux autres).
+async function ownedCommunity(db, { clientId, community }) {
+  const { rows } = await db.query(
+    `SELECT c.id FROM community c
+       JOIN community_member cm ON cm.community_id = c.id AND cm.api_client_id = $2 AND cm.role = 'owner'
+      WHERE c.slug = $1`,
+    [community, clientId],
+  );
+  if (rows.length === 0) throw new BillingError('not_found', `Communauté inconnue ou réservée à ses propriétaires : ${community}`);
+  return Number(rows[0].id);
+}
+
+// Membres, avec leur dépense sur 30 jours.
+export async function listMembers({ clientId, community }) {
+  const communityId = await ownedCommunity({ query }, { clientId, community });
+  const { rows } = await query(
+    `SELECT ac.name, cm.role, cm.monthly_limit, cm.joined_at, ac.revoked_at IS NOT NULL AS revoked,
+            greatest(0, -coalesce((SELECT sum(e.delta) FROM wallet_entry e JOIN wallet w ON w.id = e.wallet_id
+                                    WHERE w.community_id = cm.community_id AND e.api_client_id = cm.api_client_id
+                                      AND e.kind IN ('debit', 'refund') AND e.created_at > now() - interval '30 days'), 0))::bigint AS spent_30d
+       FROM community_member cm JOIN api_client ac ON ac.id = cm.api_client_id
+      WHERE cm.community_id = $1
+      ORDER BY cm.role DESC, ac.name`,
+    [communityId],
+  );
+  return rows.map((r) => ({
+    name: r.name,
+    role: r.role,
+    monthly_limit: r.monthly_limit === null ? null : Number(r.monthly_limit),
+    spent_30d: Number(r.spent_30d),
+    revoked: r.revoked,
+    joined_at: r.joined_at,
+  }));
+}
+
+// Une communauté garde au moins un propriétaire : sinon plus personne ne la gère.
+async function assertOwnerLeft(db, communityId, name) {
+  const { rows } = await db.query(
+    `SELECT count(*)::int AS n FROM community_member cm JOIN api_client ac ON ac.id = cm.api_client_id
+      WHERE cm.community_id = $1 AND cm.role = 'owner' AND ac.name <> $2 AND ac.revoked_at IS NULL`,
+    [communityId, name],
+  );
+  if (rows[0].n === 0) throw new BillingError('invalid', 'La communauté doit garder au moins un propriétaire actif');
+}
+
+// Ajoute un membre ou change son rôle ou son plafond, par un propriétaire (upsert partiel).
+export async function ownerSetMember({ clientId, community, name, role, monthlyLimit }) {
+  checkMemberFields(role, monthlyLimit);
+  return withTransaction(async (db) => {
+    const communityId = await ownedCommunity(db, { clientId, community });
+    // Sérialise les changements de rôle : la garde du dernier propriétaire reste juste.
+    await db.query('SELECT 1 FROM community WHERE id = $1 FOR UPDATE', [communityId]);
+    const { rows } = await db.query('SELECT id FROM api_client WHERE name = $1 AND revoked_at IS NULL', [name]);
+    if (rows.length === 0) throw new BillingError('not_found', `Client inconnu ou révoqué : ${name}`);
+    if (role === 'member') await assertOwnerLeft(db, communityId, name);
+    const { rows: set } = await db.query(UPSERT_MEMBER, [communityId, rows[0].id, role ?? null, monthlyLimit ?? null, monthlyLimit !== undefined]);
+    const m = memberRow(set[0]);
+    return { community, name, role: m.role, monthly_limit: m.monthlyLimit };
+  });
+}
+
+export async function ownerRemoveMember({ clientId, community, name }) {
+  return withTransaction(async (db) => {
+    const communityId = await ownedCommunity(db, { clientId, community });
+    await db.query('SELECT 1 FROM community WHERE id = $1 FOR UPDATE', [communityId]);
+    await assertOwnerLeft(db, communityId, name);
+    const { rowCount } = await db.query(
+      `DELETE FROM community_member WHERE community_id = $1
+          AND api_client_id = (SELECT id FROM api_client WHERE name = $2)`,
+      [communityId, name],
+    );
+    if (rowCount === 0) throw new BillingError('not_found', `${name} n'est pas membre de ${community}`);
+    return { community, name };
+  });
 }

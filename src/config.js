@@ -73,6 +73,9 @@ export const config = Object.freeze({
     .filter(Boolean),
   requestMaxPages: intEnv('WEBPOOL_REQUEST_MAX_PAGES', 3, 1),
   requestMaxQueued: intEnv('WEBPOOL_REQUEST_MAX_QUEUED', 5, 1),
+  // crédit minimal en centimes : sous ce montant, les frais fixes de paiement
+  // (≈ 0,25 € par transaction) dépassent la marge
+  minCreditCents: intEnv('WEBPOOL_MIN_CREDIT_CENTS', 200, 0),
   // page de don ou d'achat de giri affichée par l'interface
   fundingUrl: process.env.WEBPOOL_FUNDING_URL || null,
   userAgent: `webpool/${version} (+https://github.com/RebelliousSmile/webpool)`,

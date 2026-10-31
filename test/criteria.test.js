@@ -34,11 +34,13 @@ describe('buildPoolQuery', () => {
     expect(values).toContain(10);
   });
 
-  it('include_requests : critères OU recherches du pool, domains_exclude toujours', () => {
-    const def = { theme: 'ia-generative', domains_exclude: ['pinterest.com'], include_requests: true };
+  it('include_requests : sujet OU recherches du pool ; seuils et domains_exclude toujours', () => {
+    const def = { theme: 'ia-generative', min_quality: 0.4, domains_exclude: ['pinterest.com'], include_requests: true };
     const { text, values } = buildPoolQuery(def, { poolId: 7 });
     expect(text).toMatch(/OR EXISTS \(SELECT 1 FROM url_source us JOIN search_request sr/);
     expect(text).toMatch(/NOT \(ui\.domain = ANY/);
+    // le seuil est hors de la disjonction : il s'applique aux URLs des recherches
+    expect(text).toMatch(/ui\.quality_score >= \$\d+\n\s+AND \(\(/);
     expect(values).toContain(7);
     // chaque $n référencé a sa valeur
     const max = Math.max(...[...text.matchAll(/\$(\d+)/g)].map((m) => Number(m[1])));

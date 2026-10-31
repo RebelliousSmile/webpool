@@ -9,7 +9,9 @@ import { USAGE_VALUES } from '../domains/index.js';
 import { QUERY_STATUSES, listQueries } from '../explore/index.js';
 import { formatPool, FORMATS } from '../pools/export.js';
 import { loadPoolForExport } from '../pools/index.js';
-import { BillingError, currentPrices, walletEntries, walletsFor } from '../billing/index.js';
+import {
+  BillingError, currentPrices, listMembers, ownerRemoveMember, ownerSetMember, walletEntries, walletsFor,
+} from '../billing/index.js';
 import { REQUEST_STATUSES, cancelRequest, createRequest, listRequests } from '../requests/index.js';
 import {
   ApiError,
@@ -25,7 +27,7 @@ import {
   paged,
 } from './params.js';
 
-// Handlers en lecture seule. Chacun reçoit { client, params, query } et renvoie
+// Handlers de l'API. Chacun reçoit { client, params, query, body } et renvoie
 // { body } (JSON) ou { raw, contentType, filename }.
 
 const URL_STATUSES = ['pending', 'normalized', 'classified', 'duplicate', 'error'];
@@ -82,16 +84,17 @@ export async function me({ client }) {
   return { body: { name: client.name, scope: client.scope } };
 }
 
-// --- Pools : visibles par l'admin, accordés au client `read`, ou pools d'une
-// communauté dont il est membre.
+// --- Pools : visibles par l'admin ; pour un client `read`, les pools publics,
+// ceux qui lui sont accordés et ceux de ses communautés.
 
-const GRANTED_SQL = (clientParam) => `(EXISTS (SELECT 1 FROM api_client_pool cp WHERE cp.pool_id = p.id AND cp.api_client_id = ${clientParam})
+const GRANTED_SQL = (clientParam) => `(p.public
+         OR EXISTS (SELECT 1 FROM api_client_pool cp WHERE cp.pool_id = p.id AND cp.api_client_id = ${clientParam})
          OR EXISTS (SELECT 1 FROM community_pool cp JOIN community_member cm ON cm.community_id = cp.community_id
                      WHERE cp.pool_id = p.id AND cm.api_client_id = ${clientParam}))`;
 
 async function visiblePool(client, slug) {
   const { rows } = await query(
-    `SELECT p.id, p.slug, p.label, p.definition, p.created_at, p.refreshed_at
+    `SELECT p.id, p.slug, p.label, p.public, p.definition, p.created_at, p.refreshed_at
        FROM pool p
       WHERE p.slug = $1
         AND ($2 OR ${GRANTED_SQL('$3')})`,
@@ -104,7 +107,7 @@ async function visiblePool(client, slug) {
 
 export async function listPools({ client }) {
   const { rows } = await query(
-    `SELECT p.slug, p.label, p.refreshed_at, count(pi.url_item_id)::int AS items
+    `SELECT p.slug, p.label, p.public, p.refreshed_at, count(pi.url_item_id)::int AS items
        FROM pool p
        LEFT JOIN pool_item pi ON pi.pool_id = p.id
       WHERE $1 OR ${GRANTED_SQL('$2')}
@@ -137,6 +140,7 @@ export async function getPool({ client, params }) {
   const body = {
     slug: pool.slug,
     label: pool.label,
+    public: pool.public,
     refreshed_at: iso(pool.refreshed_at),
     items: usage.reduce((n, u) => n + u.urls, 0),
     top_domains: domains,
@@ -578,4 +582,33 @@ export async function listAllRequests({ query: qs }) {
   const status = enumParam(qs, 'status', REQUEST_STATUSES);
   const { items, total } = await listRequests({ status, ...page });
   return { body: paged(items, total, page) };
+}
+
+// --- Membres d'une communauté, gérés par ses propriétaires.
+
+export async function listCommunityMembers({ client, params }) {
+  const items = await billingCall(() => listMembers({ clientId: client.id, community: params.slug }));
+  return { body: { items: items.map((m) => ({ ...m, joined_at: iso(m.joined_at) })) } };
+}
+
+export async function putCommunityMember({ client, params, body }) {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) throw badRequest('Objet JSON attendu');
+  const unknown = Object.keys(body).filter((k) => k !== 'role' && k !== 'monthly_limit');
+  if (unknown.length) throw badRequest(`Champ inconnu : ${unknown.join(', ')}`);
+  return {
+    body: await billingCall(() =>
+      ownerSetMember({
+        clientId: client.id,
+        community: params.slug,
+        name: params.name,
+        // champ absent : valeur gardée ; monthly_limit null : sans plafond
+        role: body.role,
+        monthlyLimit: body.monthly_limit,
+      }),
+    ),
+  };
+}
+
+export async function deleteCommunityMember({ client, params }) {
+  return { body: await billingCall(() => ownerRemoveMember({ clientId: client.id, community: params.slug, name: params.name })) };
 }
