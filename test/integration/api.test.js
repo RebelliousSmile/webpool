@@ -78,6 +78,27 @@ describe.skipIf(!available)('API HTTP sur PostgreSQL', () => {
     expect((await get('/me', temp)).status).toBe(401);
   });
 
+  it('gère les clients : liste, accès aux pools, erreurs', async () => {
+    const rows = await clients.listClients();
+    expect(rows.map((c) => [c.name, c.scope, c.pools])).toEqual(
+      expect.arrayContaining([
+        ['client-a', 'read', ['lora']],
+        ['moi', 'admin', []],
+      ]),
+    );
+    await expect(clients.addClient({ name: 'moi' })).rejects.toThrow('Client existant : moi');
+    await expect(clients.addClient({ name: 'x', scope: 'root' })).rejects.toThrow('--scope invalide');
+    await expect(clients.revokeClient({ name: 'personne' })).rejects.toThrow('Client inconnu ou déjà révoqué');
+    await expect(clients.setPoolAccess({ name: 'personne', slug: 'lora', granted: true })).rejects.toThrow('Client inconnu');
+    await expect(clients.setPoolAccess({ name: 'client-a', slug: 'nope', granted: true })).rejects.toThrow('Pool inconnu');
+
+    await clients.setPoolAccess({ name: 'client-a', slug: 'secret', granted: true });
+    expect((await get('/pools/secret', reader)).status).toBe(200);
+    await clients.setPoolAccess({ name: 'client-a', slug: 'secret', granted: false });
+    expect((await get('/pools/secret', reader)).status).toBe(404);
+    expect(await clients.authenticate(null)).toBeNull();
+  });
+
   it('limite un client read à ses pools, sans définition ni score', async () => {
     expect((await get('/pools', admin)).body.items.map((p) => p.slug)).toEqual(['lora', 'secret']);
     const list = await get('/pools', reader);
@@ -172,5 +193,26 @@ describe.skipIf(!available)('API HTTP sur PostgreSQL', () => {
     expect(csv.body.split('\n')[0]).toBe('rank,url,domain,title,score');
     expect((await get('/admin/pools/nope/export', admin)).status).toBe(404);
     expect((await get('/admin/pools/lora/export?format=xml', admin)).status).toBe(400);
+  });
+
+  it('serve démarre, répond et s\u2019arrête sur SIGTERM', async () => {
+    const { serve } = await import('../../src/api/index.js');
+    const lines = [];
+    let resolveStarted;
+    const started = new Promise((r) => (resolveStarted = r));
+    const done = serve({
+      port: 0,
+      host: '127.0.0.1',
+      corsOrigins: [],
+      log: (line) => {
+        lines.push(line);
+        if (line.startsWith('webpool API sur')) resolveStarted(line);
+      },
+    });
+    const url = /http:\/\/[^ ]+/.exec(await started)[0];
+    expect((await fetch(`${url}/health`)).status).toBe(200);
+    process.emit('SIGTERM');
+    await done;
+    expect(lines.some((l) => l.startsWith('GET /api/v1/health 200'))).toBe(true);
   });
 });

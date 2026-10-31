@@ -57,7 +57,7 @@ describe('buildPoolQuery', () => {
   it('recent : score lisible décroissant avec l’âge, ordre par découverte', () => {
     const { text } = buildPoolQuery({ order: 'recent' });
     expect(text).toContain('ORDER BY ui.first_seen_at DESC, ui.id');
-    expect(text).not.toMatch(/0 AS pool_score/);
+    expect(text).not.toMatch(/\b0 AS pool_score/);
   });
 
   it('rejette les critères inconnus', () => {

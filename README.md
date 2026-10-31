@@ -471,7 +471,14 @@ sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
 pnpm test               # fonctions pures, aucune base requise
 pnpm db:up
 pnpm test:integration   # couches DB (ingest, normalize, classify, pools, explore, cycle, API)
+pnpm test:coverage      # les deux suites, couverture de src/ (rapport HTML dans coverage/)
+pnpm lint               # ESLint
 ```
+
+`test:coverage` exige la base et échoue sous les planchers fixés dans
+`vitest.coverage.config.js` (instructions 95 %, branches 90 %, fonctions 93 %,
+lignes 97 %). `bin/webpool.js` n'est pas compté : `test/cli.test.js` le lance dans
+un processus séparé, que la mesure ne suit pas.
 
 La suite d'intégration utilise le PostgreSQL docker local dans un schéma jetable créé
 puis supprimé par fichier de test, remis à zéro entre les tests. Elle charge `.env` et
@@ -481,7 +488,7 @@ Sur un poste, elle est ignorée avec un avertissement si la base est injoignable
 `WEBPOOL_IT_REQUIRED=1` la rend obligatoire : une base injoignable fait alors échouer
 la commande. La CI GitHub Actions (`.github/workflows/ci.yml`, Node 22 et 24, service
 `postgres:17-alpine`) la rend obligatoire d'office et exécute les deux suites à chaque
-push et pull request.
+push et pull request, après `pnpm lint`, via `pnpm test:coverage`.
 
 ## Licence
 

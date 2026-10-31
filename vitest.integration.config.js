@@ -4,6 +4,7 @@ import { defineConfig } from 'vitest/config';
 // Un schéma jetable par fichier de test isole la suite des données réelles.
 export default defineConfig({
   test: {
+    name: 'integration',
     include: ['test/integration/**/*.test.js'],
     setupFiles: ['test/integration/setup.js'],
     fileParallelism: false,
