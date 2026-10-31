@@ -15,6 +15,9 @@ import {
   backupFileName,
   parseArgs,
   parseItemized,
+  pgConnectionEnv,
+  pgEnvCommand,
+  shellExports,
   shQuote,
   validateRemoteRelativePath,
   validateTarget,
@@ -194,6 +197,59 @@ describe('DATABASE_URL_CHECK', () => {
     expect(run(undefined)).toBe('absente');
     expect(run('postgres://u:p@h.example:5433/base')).toMatch(/5433/);
     expect(run('mysql://u:p@h.example/base')).toMatch(/schéma/);
+  });
+});
+
+describe('mot de passe de la base hors de la ligne de commande', () => {
+  it('sépare le mot de passe (décodé) de l’URL', () => {
+    expect(pgConnectionEnv('postgres://u:a%25b%40c@h.example:5432/base')).toEqual({
+      url: 'postgres://u@h.example:5432/base',
+      password: 'a%b@c',
+    });
+    expect(pgConnectionEnv('postgresql://u@h/b')).toEqual({ url: 'postgresql://u@h/b', password: '' });
+    expect(pgConnectionEnv('postgres://u@h/b?password=s3&sslmode=require')).toEqual({
+      url: 'postgres://u@h/b?sslmode=require',
+      password: 's3',
+    });
+    expect(() => pgConnectionEnv('')).toThrow();
+  });
+
+  it('cite les valeurs pour le shell', () => {
+    expect(shellExports({ A: "it's", B: '$x `y`' })).toBe("export A='it'\\''s'\nexport B='$x `y`'\n");
+  });
+
+  // Le fragment distant, exécuté par sh comme sur la cible ; « psql » est
+  // remplacé par node, qui montre ses arguments et son PGPASSWORD.
+  const runRemote = (envContent) => {
+    const dir = mkdtempSync(join(tmpdir(), 'webpool-env-'));
+    const file = join(dir, 'x.env');
+    writeFileSync(file, envContent);
+    const env = { ...process.env };
+    delete env.DATABASE_URL;
+    delete env.PGPASSWORD;
+    const show = `${shQuote(process.execPath)} -e 'console.log(JSON.stringify({ argv: process.argv.slice(1), pw: process.env.PGPASSWORD ?? null }))'`;
+    const command = `${pgEnvCommand(shQuote(process.execPath), shQuote(file))} && ${show} "$WEBPOOL_PG_URL"`;
+    try {
+      return { command, out: JSON.parse(execFileSync('sh', ['-c', command], { encoding: 'utf8', env })) };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it("transmet le mot de passe par PGPASSWORD et une URL sans lui en argument", () => {
+    const secret = "S3cr'et $HOME `id`";
+    const { command, out } = runRemote(`DATABASE_URL=postgres://u:${encodeURIComponent(secret)}@h.example:5432/base\n`);
+    expect(out).toEqual({ argv: ['postgres://u@h.example:5432/base'], pw: secret });
+    expect(command).not.toContain('S3cr');
+  });
+
+  it("n'exporte pas de PGPASSWORD vide", () => {
+    expect(runRemote('DATABASE_URL=postgres://u@h/b\n').out).toEqual({ argv: ['postgres://u@h/b'], pw: null });
+  });
+
+  it('échoue si DATABASE_URL est absente ou illisible', () => {
+    expect(() => runRemote('AUTRE=1\n')).toThrow();
+    expect(() => runRemote('DATABASE_URL=pas une url\n')).toThrow();
   });
 });
 

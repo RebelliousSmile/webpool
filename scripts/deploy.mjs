@@ -32,6 +32,7 @@ import {
   missingKeyHelp,
   parseArgs,
   parseItemized,
+  pgEnvCommand,
   restartRequest,
   shQuote,
   sshOptions,
@@ -149,8 +150,9 @@ if (ssh('command -v pg_dump >/dev/null && command -v psql >/dev/null && echo pre
 }
 // Connexion réelle (hôte, droits, nom de base) avant le verrou et toute mutation.
 // psql ne recopie pas l'URL dans ses erreurs, contrairement à pg_dump sur une URL mal formée.
+// Mot de passe par PGPASSWORD, jamais dans les arguments (visibles par `ps`).
 try {
-  ssh(`DATABASE_URL="$(${node} -e 'process.loadEnvFile(process.argv[1]); process.stdout.write(process.env.DATABASE_URL)' "$HOME"/${target.envFile})" && psql "$DATABASE_URL" -XAtqc 'select 1' > /dev/null`);
+  ssh(`${pgEnvCommand(node, `"$HOME"/${target.envFile}`)} && psql "$WEBPOOL_PG_URL" -XAtqc 'select 1' > /dev/null`);
 } catch (error) {
   throw new Error(`Connexion à la base impossible avec la DATABASE_URL de ~/${target.envFile} :\n${String(error.stderr ?? '').trim()}`, { cause: error });
 }
@@ -214,13 +216,13 @@ await withRemoteLock(ssh, target, async () => {
 
   const backup = `${target.backupDir}/${backupFileName(new Date(), shortCommit)}`;
   console.log(`Sauvegarde de la base → ~/${backup}`);
-  // DATABASE_URL lue par le même parseur que le CLI, jamais affichée
+  // DATABASE_URL lue par le même parseur que le CLI, jamais affichée ; le mot
+  // de passe passe par PGPASSWORD, pg_dump ne reçoit que l'URL sans lui
   ssh([
     `cd ${target.newDir}`,
-    `DATABASE_URL="$(${node} -e 'process.loadEnvFile(".env"); process.stdout.write(process.env.DATABASE_URL ?? "")')"`,
-    'test -n "$DATABASE_URL"',
+    pgEnvCommand(node, '.env'),
     // pg_dump crée le fichier avant d'échouer : pas de sauvegarde vide dans la rotation
-    `{ pg_dump -Fc -d "$DATABASE_URL" -f "$HOME"/${backup} && test -s "$HOME"/${backup} || { rm -f "$HOME"/${backup}; exit 1; }; }`,
+    `{ pg_dump -Fc -d "$WEBPOOL_PG_URL" -f "$HOME"/${backup} && test -s "$HOME"/${backup} || { rm -f "$HOME"/${backup}; exit 1; }; }`,
   ].join(' && '));
   ssh(`ls -1t ${target.backupDir}/webpool-*.dump | tail -n +6 | xargs -r rm --`);
 
@@ -240,7 +242,7 @@ await withRemoteLock(ssh, target, async () => {
   const sshCmd = `wsl ssh -i ${target.sshKey} ${target.remote}`;
   console.log('\nRestauration si besoin (jusqu\'au prochain déploiement) :');
   if (appExists) console.log(`  code   : ${sshCmd} "mv ${target.appDir} ${target.appDir}.broken && mv ${target.oldDir} ${target.appDir}"`, 'puis redémarrer le site de l\'API');
-  console.log(`  schéma : pg_restore --clean --if-exists -d "$DATABASE_URL" ~/${backup}  (sur la cible)`);
+  console.log(`  schéma : pg_restore --clean --if-exists -d "<URL sans mot de passe>" ~/${backup}  (sur la cible, mot de passe par PGPASSWORD ou ~/.pgpass)`);
 });
 
 // --- API : redémarrage et contrôle ------------------------------------------

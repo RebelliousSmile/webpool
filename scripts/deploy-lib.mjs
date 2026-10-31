@@ -73,6 +73,46 @@ else {
 process.stdout.write(problem);
 `;
 
+// Le mot de passe ne doit jamais apparaître dans les arguments de psql ou
+// pg_dump (`ps` les montre à tout l'hôte mutualisé) : il passe par PGPASSWORD,
+// et les commandes ne reçoivent qu'une URL sans mot de passe.
+// Les deux fonctions ci-dessous sont autonomes : PG_ENV_SCRIPT les embarque
+// telles quelles pour les exécuter sur la cible.
+export function pgConnectionEnv(raw) {
+  const url = new URL(raw);
+  let password = url.password ? decodeURIComponent(url.password) : '';
+  if (!password && url.searchParams.has('password')) password = url.searchParams.get('password');
+  url.password = '';
+  url.searchParams.delete('password');
+  return { url: url.href, password };
+}
+
+// Lignes `export NOM='valeur'` pour un `eval` du shell distant : de simples
+// affectations, aucun processus ne voit la valeur passer dans ses arguments.
+export function shellExports(vars) {
+  return Object.entries(vars)
+    .map(([name, value]) => `export ${name}='${String(value).replace(/'/g, `'\\''`)}'\n`)
+    .join('');
+}
+
+// Exécuté par node sur la cible (argument : le fichier env). Écrit les exports
+// de WEBPOOL_PG_URL (URL sans mot de passe) et PGPASSWORD ; rien, et le code 1,
+// si DATABASE_URL est absente ou illisible.
+export const PG_ENV_SCRIPT = `
+${pgConnectionEnv}
+${shellExports}
+process.loadEnvFile(process.argv[1]);
+let env;
+try { env = pgConnectionEnv(process.env.DATABASE_URL ?? ''); } catch { process.exit(1); }
+process.stdout.write(shellExports({ WEBPOOL_PG_URL: env.url, ...(env.password ? { PGPASSWORD: env.password } : {}) }));
+`;
+
+// Fragment de commande distante : exporte WEBPOOL_PG_URL et PGPASSWORD lus dans
+// `envFile` (chemin déjà cité pour le shell), puis vérifie l'URL.
+export function pgEnvCommand(node, envFile) {
+  return `eval "$(${node} -e ${shQuote(PG_ENV_SCRIPT)} ${envFile})" && test -n "$WEBPOOL_PG_URL"`;
+}
+
 // Posé dans le répertoire livré, en défense si un site venait à servir ~/www :
 // .env y est un lien vers le fichier de secrets.
 export const HTACCESS_DENY = 'Require all denied';
