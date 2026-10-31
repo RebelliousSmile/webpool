@@ -12,7 +12,7 @@ status: done
 
 ```txt
 .
-├── db/migrations/006_explore_pipe.sql         ✏️ entered_after : dernier id d'appel à l'entrée dans le tuyau (006 n'est pas encore en production)
+├── db/migrations/007_explore_pipe.sql         ✏️ entered_after : dernier id d'appel à l'entrée dans le tuyau ; renumérotée (ex-006), comme 006_domain_run (ex-005), main ayant publié 005_api_client
 ├── src/explore/index.js                       ✏️ query import ajoute les étiquettes manquantes aux requêtes existantes (aujourd'hui ON CONFLICT DO NOTHING) ; mesure des tuyaux par id d'appel
 ├── examples/creatures/queries.json            ✏️ flot:creatures
 ├── examples/japon/queries.json                ✏️ flot:japon
@@ -31,7 +31,7 @@ Serveur (hors dépôt)
 flowchart TD
   A[étiquettes flot: dans les exemples] --> B[commit et push sur demande]
   B --> C[deploy:prod ad --check puis --apply après confirmation]
-  C --> D[migrate 005 et 006, classify --all pour les notes CJK]
+  C --> D[migrate 005 à 007, classify --all pour les notes CJK]
   D --> E[query import des fichiers étiquetés]
   E --> F[pipe list : 4 tuyaux, japon courant]
 ```
