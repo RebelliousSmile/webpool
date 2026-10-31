@@ -98,7 +98,7 @@ pnpm webpool pool create --slug lora-foret --label "LoRA forêt" --file mes-crit
 pnpm webpool pool create --slug lora-foret --file mes-criteres.json --force   # remplace un pool existant
 pnpm webpool pool refresh --slug lora-foret
 pnpm webpool pool show --slug lora-foret
-pnpm webpool pool export --slug lora-foret --format csv --out lora-foret.csv   # json | csv | md, stdout par défaut
+pnpm webpool pool export --slug lora-foret --format csv --out lora-foret.csv   # json | csv | md | txt, stdout par défaut
 pnpm webpool stats
 pnpm webpool migrate              # applique les migrations manquantes (pnpm db:up le fait)
 ```
@@ -408,9 +408,10 @@ pnpm webpool client revoke --name client-a
 | `/media/{empreinte}.webp` | public | vignette ou favicon du cache (`Cache-Control: immutable`) |
 | `/me` | read | client authentifié |
 | `/pools`, `/pools/{slug}` | read | pools visibles ; volumes, domaines principaux, répartition de l'usage commercial |
+| `/pools/{slug}/export?format=json\|csv\|md\|txt` | read | le pool entier dans l'ordre de rang, sans définition ni score (`txt` : une URL par ligne) |
 | `/pools/{slug}/items` | read | URLs rangées, paginées (`limit` ≤ 500, `offset`), avec description, type de média, famille de source, vignette et favicon |
 | `/admin/stats` | admin | volumes pour un tableau de bord |
-| `/admin/pools/{slug}/export?format=json\|csv\|md` | admin | export de `pool export` |
+| `/admin/pools/{slug}/export?format=json\|csv\|md\|txt` | admin | export de `pool export`, définition et scores compris |
 | `/admin/urls`, `/admin/urls/{id}` | admin | corpus filtré (`status`, `theme`, `facet=slug:valeur`, `domain`, `q`, `order`) ; fiche : sources, thèmes, facettes, pools |
 | `/admin/themes`, `/admin/facets` | admin | taxonomie en arbre, valeurs de facettes, avec volumes |
 | `/admin/domains` | admin | registre (`to_qualify`, `excluded`, `usage`, `q`) |

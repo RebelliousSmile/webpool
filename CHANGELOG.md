@@ -7,6 +7,7 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions [Sem
 
 ### Added
 
+- Export des pools ouvert aux clients `read` (`GET /api/v1/pools/{slug}/export`), sans définition ni score ; format `txt` (une URL par ligne) pour l'API et `pool export` ; usage commercial dans le corpus (`/admin/urls`).
 - Déploiement de l'API : site Node.js alwaysdata (`webpool serve`), redémarré après la bascule (API alwaysdata avec `ALWAYSDATA_API_TOKEN` local et `apiSiteId`, sinon consigne), contrôle de `/health` qui renvoie la version et le commit livré (`REVISION`) ; cache de médias créé et `WEBPOOL_MEDIA_DIR` vérifié ; opération `deploy:api` au contrat.
 - Médias des liens : description, type de média, langue et nom du site lus à la normalisation ; vignettes (aperçu de la page, sinon vignette du provider) et favicons mis en cache en WebP par `webpool media` (étape de `cycle`) ; champs `description`, `media_type`, `source`, `thumbnail`, `favicon` dans l'API, fichiers servis par `/api/v1/media/{empreinte}.webp` ; migration `008_url_media`, dépendance `sharp`.
 - API HTTP en lecture seule : `webpool serve`, routes `/api/v1` (pools, corpus, taxonomie, domaines, frontière, runs, export), contrat `openapi.json`.

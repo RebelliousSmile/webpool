@@ -19,6 +19,7 @@ export const routes = [
   { path: '/api/v1/pools', scope: 'read', handler: h.listPools },
   { path: '/api/v1/pools/:slug', scope: 'read', handler: h.getPool },
   { path: '/api/v1/pools/:slug/items', scope: 'read', handler: h.listPoolItems },
+  { path: '/api/v1/pools/:slug/export', scope: 'read', handler: h.exportVisiblePool },
   { path: '/api/v1/admin/stats', scope: 'admin', handler: h.adminStats },
   { path: '/api/v1/admin/pools/:slug/export', scope: 'admin', handler: h.exportPool },
   { path: '/api/v1/admin/urls', scope: 'admin', handler: h.listUrls },

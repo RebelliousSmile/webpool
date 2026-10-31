@@ -166,21 +166,33 @@ export async function listPoolItems({ client, params, query: qs }) {
   return { body: paged(items, total, page) };
 }
 
-const EXPORT_TYPES = { json: 'application/json', csv: 'text/csv', md: 'text/markdown' };
+const EXPORT_TYPES = { json: 'application/json', csv: 'text/csv', md: 'text/markdown', txt: 'text/plain' };
 
+// Export admin : définition et scores compris.
 export async function exportPool({ params, query: qs }) {
+  return exportResponse(params.slug, enumParam(qs, 'format', FORMATS) ?? 'json', { client: false });
+}
+
+// Export d'un pool visible par le client (accordé, ou tout pool pour l'admin),
+// sans définition ni score : les critères de sélection restent internes.
+export async function exportVisiblePool({ client, params, query: qs }) {
   const format = enumParam(qs, 'format', FORMATS) ?? 'json';
+  await visiblePool(client, params.slug);
+  return exportResponse(params.slug, format, { client: true });
+}
+
+async function exportResponse(slug, format, { client }) {
   let data;
   try {
-    data = await loadPoolForExport(params.slug);
+    data = await loadPoolForExport(slug);
   } catch (err) {
     if (err.message.startsWith('Pool inconnu')) throw notFound(err.message);
     throw err;
   }
   return {
-    raw: formatPool(data, format),
+    raw: formatPool(data, format, { client }),
     contentType: `${EXPORT_TYPES[format]}; charset=utf-8`,
-    filename: `${params.slug.replace(/[^\w.-]/g, '_')}.${format}`,
+    filename: `${slug.replace(/[^\w.-]/g, '_')}.${format}`,
   };
 }
 
@@ -242,6 +254,7 @@ export async function listUrls({ query: qs }) {
   const { rows, total } = await selectPage({
     select: `ui.id, coalesce(ui.canonical_url, ui.raw_url) AS url, ui.domain, ui.title, ui.status,
              ui.relevance_score, ui.quality_score, ui.confidence_score, ui.first_seen_at,
+             (SELECT d.usage_commercial FROM domain_profile d WHERE d.domain = ui.domain) AS usage_commercial,
              (SELECT t.slug FROM url_theme ut JOIN theme t ON t.id = ut.theme_id
                WHERE ut.url_item_id = ui.id AND ut.is_primary) AS primary_theme,
              ui.description, ui.media_type, ${THUMB_SQL}, ${FAVICON_SQL}`,

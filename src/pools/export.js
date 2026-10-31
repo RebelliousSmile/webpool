@@ -1,9 +1,11 @@
 // US-12 — export d'un pool matérialisé vers un format consommable hors base.
 // Les formateurs sont des fonctions pures (testables sans base).
+// Variante `client` (clients read de l'API) : ni définition ni score, les
+// critères de sélection restent internes.
 
-export const FORMATS = ['json', 'csv', 'md'];
+export const FORMATS = ['json', 'csv', 'md', 'txt'];
 
-export function toJson({ pool, items }) {
+export function toJson({ pool, items }, { client = false } = {}) {
   return `${JSON.stringify(
     {
       pool: {
@@ -12,14 +14,14 @@ export function toJson({ pool, items }) {
         refreshed_at: pool.refreshed_at ? new Date(pool.refreshed_at).toISOString() : null,
         count: items.length,
         // Réexécutable : webpool pool create --slug <slug> --file <ce fichier extrait de .pool.definition>
-        definition: pool.definition,
+        ...(client ? {} : { definition: pool.definition }),
       },
       items: items.map((it) => ({
         rank: it.rank,
         url: it.canonical_url,
         domain: it.domain,
         title: it.title ?? null,
-        score: Number(it.score),
+        ...(client ? {} : { score: Number(it.score) }),
       })),
     },
     null,
@@ -35,14 +37,12 @@ function csvCell(value) {
   return /[",\n\r]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
 }
 
-export function toCsv({ items }) {
-  const lines = ['rank,url,domain,title,score'];
+export function toCsv({ items }, { client = false } = {}) {
+  const lines = [client ? 'rank,url,domain,title' : 'rank,url,domain,title,score'];
   for (const it of items) {
-    lines.push(
-      [it.rank, it.canonical_url, it.domain, it.title, Number(it.score).toFixed(3)]
-        .map(csvCell)
-        .join(','),
-    );
+    const cells = [it.rank, it.canonical_url, it.domain, it.title];
+    if (!client) cells.push(Number(it.score).toFixed(3));
+    lines.push(cells.map(csvCell).join(','));
   }
   return `${lines.join('\n')}\n`;
 }
@@ -51,28 +51,32 @@ export function toCsv({ items }) {
 const escapeHtml = (s) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const mdCell = (s) => escapeHtml(String(s ?? '')).replaceAll('|', '\\|').replace(/\s+/g, ' ').trim();
 
-export function toMarkdown({ pool, items }) {
+export function toMarkdown({ pool, items }, { client = false } = {}) {
   const lines = [
     `# ${mdCell(pool.label)}`,
     '',
     `Pool \`${pool.slug}\` — ${items.length} URLs`,
     '',
-    '| # | Titre | Domaine | Score |',
-    '|---|---|---|---|',
+    client ? '| # | Titre | Domaine |' : '| # | Titre | Domaine | Score |',
+    client ? '|---|---|---|' : '|---|---|---|---|',
   ];
   for (const it of items) {
     const title = mdCell(it.title) || mdCell(it.canonical_url);
-    lines.push(
-      `| ${it.rank} | [${title.replaceAll(']', '\\]')}](${it.canonical_url.replaceAll(')', '%29')}) | ${mdCell(it.domain)} | ${Number(it.score).toFixed(3)} |`,
-    );
+    const link = `[${title.replaceAll(']', '\\]')}](${it.canonical_url.replaceAll(')', '%29')})`;
+    lines.push(`| ${it.rank} | ${link} | ${mdCell(it.domain)} |${client ? '' : ` ${Number(it.score).toFixed(3)} |`}`);
   }
   return `${lines.join('\n')}\n`;
 }
 
-const FORMATTERS = { json: toJson, csv: toCsv, md: toMarkdown };
+// Une URL par ligne, dans l'ordre de rang : à coller dans un outil ou un script.
+export function toTxt({ items }) {
+  return items.map((it) => `${it.canonical_url}\n`).join('');
+}
 
-export function formatPool(data, format = 'json') {
+const FORMATTERS = { json: toJson, csv: toCsv, md: toMarkdown, txt: toTxt };
+
+export function formatPool(data, format = 'json', options = {}) {
   const fn = FORMATTERS[format];
   if (!fn) throw new Error(`Format inconnu : ${format} (attendu : ${FORMATS.join(', ')})`);
-  return fn(data);
+  return fn(data, options);
 }
