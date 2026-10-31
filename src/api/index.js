@@ -6,7 +6,8 @@ import * as h from './handlers.js';
 import { compileRoute } from './router.js';
 import { createApiServer } from './server.js';
 
-// API HTTP en lecture seule de webpool (`webpool serve`), décrite par openapi.json.
+// API HTTP de webpool (`webpool serve`), décrite par openapi.json. Elle lit le
+// corpus et les pools ; elle n'écrit que les recherches payantes et leur grand livre.
 export const OPENAPI_PATH = path.join(rootDir, 'openapi.json');
 
 const openapi = async () => ({ raw: fs.readFileSync(OPENAPI_PATH, 'utf8'), contentType: 'application/json; charset=utf-8' });
@@ -20,6 +21,11 @@ export const routes = [
   { path: '/api/v1/pools/:slug', scope: 'read', handler: h.getPool },
   { path: '/api/v1/pools/:slug/items', scope: 'read', handler: h.listPoolItems },
   { path: '/api/v1/pools/:slug/export', scope: 'read', handler: h.exportVisiblePool },
+  { path: '/api/v1/billing', scope: 'read', handler: h.billing },
+  { path: '/api/v1/billing/entries', scope: 'read', handler: h.listBillingEntries },
+  { path: '/api/v1/requests', scope: 'read', handler: h.listClientRequests },
+  { path: '/api/v1/requests', method: 'POST', scope: 'read', handler: h.postRequest },
+  { path: '/api/v1/requests/:id', method: 'DELETE', scope: 'read', handler: h.deleteRequest },
   { path: '/api/v1/admin/stats', scope: 'admin', handler: h.adminStats },
   { path: '/api/v1/admin/pools/:slug/export', scope: 'admin', handler: h.exportPool },
   { path: '/api/v1/admin/urls', scope: 'admin', handler: h.listUrls },
@@ -28,6 +34,7 @@ export const routes = [
   { path: '/api/v1/admin/facets', scope: 'admin', handler: h.listFacets },
   { path: '/api/v1/admin/domains', scope: 'admin', handler: h.listDomains },
   { path: '/api/v1/admin/queries', scope: 'admin', handler: h.listSearchQueries },
+  { path: '/api/v1/admin/requests', scope: 'admin', handler: h.listAllRequests },
   { path: '/api/v1/admin/runs', scope: 'admin', handler: h.listRuns },
 ].map((r) => compileRoute({ method: 'GET', ...r }));
 

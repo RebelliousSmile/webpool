@@ -146,7 +146,7 @@ export const FALLBACKS = Object.freeze({ openrouter: 'brave' });
 const excludes = (provider) => EXCLUDING_PROVIDERS.has(provider) || PARAM_EXCLUDING_PROVIDERS.has(provider);
 
 // Exclusion envoyée à `provider` : suffixe `-site:` ou liste de domaines.
-function exclusionFor(provider, text, saturated, maxChars) {
+export function exclusionFor(provider, text, saturated, maxChars) {
   if (EXCLUDING_PROVIDERS.has(provider)) {
     const exclusion = applyExclusion(text, saturated, maxChars);
     const excluded = exclusion.excluded.length;
@@ -160,7 +160,7 @@ function exclusionFor(provider, text, saturated, maxChars) {
 }
 
 // Même compte que `domain list` : URLs normalisées ou classées.
-async function loadSaturated(threshold) {
+export async function loadSaturated(threshold) {
   const { rows } = await query(
     `SELECT dp.domain, dp.explore_excluded AS excluded, count(ui.id)::int AS urls
        FROM domain_profile dp

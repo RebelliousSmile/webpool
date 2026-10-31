@@ -3,7 +3,7 @@
   "info": {
     "title": "webpool API",
     "version": "1.0.0",
-    "description": "API HTTP en lecture seule de webpool (`webpool serve`). Authentification par jeton `Authorization: Bearer`, créé avec `webpool client add`. Un client `read` ne voit que les pools qui lui sont accordés (`webpool client grant`) ; les routes `/admin` sont réservées aux clients `admin`."
+    "description": "API HTTP de webpool (`webpool serve`). Authentification par jeton `Authorization: Bearer`, créé avec `webpool client add`. Un client `read` voit les pools qui lui sont accordés (`webpool client grant`) et ceux des communautés dont il est membre ; les routes `/admin` sont réservées aux clients `admin`. Les pools sont gratuits ; une recherche (appel à un provider) se paie d'avance en giri, sur le portefeuille du client (crédité par un don) ou sur celui d'une communauté (giri achetés), et ne s'écrit que par `POST /requests`. Le reste de l'API ne fait que lire."
   },
   "servers": [
     {
@@ -863,7 +863,9 @@
                 "normalize",
                 "classify",
                 "pool",
-                "explore"
+                "explore",
+                "media",
+                "request"
               ]
             }
           },
@@ -881,6 +883,342 @@
             }
           }
         ]
+      }
+    },
+    "/billing": {
+      "get": {
+        "summary": "Prix des recherches et portefeuilles du client (personnel, communautés)",
+        "tags": [
+          "recherches"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Billing"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/billing/entries": {
+      "get": {
+        "summary": "Grand livre du portefeuille personnel, ou d'une communauté pour ses propriétaires",
+        "tags": [
+          "recherches"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/offset"
+          },
+          {
+            "name": "community",
+            "in": "query",
+            "description": "Communauté dont le client est propriétaire (`owner`) ; absent : le client lui-même",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Page"
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "items"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/WalletEntry"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/requests": {
+      "get": {
+        "summary": "Recherches du client, ou de la communauté pour ses propriétaires, plus récentes d'abord",
+        "tags": [
+          "recherches"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/offset"
+          },
+          {
+            "name": "community",
+            "in": "query",
+            "description": "Communauté dont le client est propriétaire (`owner`) ; absent : le client lui-même",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Statut",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "done",
+                "failed",
+                "cancelled"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Page"
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "items"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/SearchRequest"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "summary": "Achète une recherche : prix débité d'avance, exécution par la tâche `webpool requests run`, pages non lancées remboursées",
+        "tags": [
+          "recherches"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequestInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Recherche inscrite et payée",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestReceipt"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "402": {
+            "$ref": "#/components/responses/PaymentRequired"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "413": {
+            "description": "Corps de plus de 8 Ko",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Corps autre que application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/requests/{id}": {
+      "delete": {
+        "summary": "Annule une recherche encore en attente, remboursée en entier",
+        "tags": [
+          "recherches"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Annulée",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelReceipt"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/admin/requests": {
+      "get": {
+        "summary": "Toutes les recherches payantes, plus récentes d'abord",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/offset"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Statut",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "done",
+                "failed",
+                "cancelled"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Page"
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "items"
+                      ],
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/SearchRequest"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
       }
     }
   },
@@ -945,6 +1283,26 @@
       },
       "NotFound": {
         "description": "Introuvable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "PaymentRequired": {
+        "description": "Solde insuffisant (`insufficient_balance`) ou plafond du membre atteint (`spend_limit`)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "Trop de recherches en attente pour ce client (`too_many_queued`)",
         "content": {
           "application/json": {
             "schema": {
@@ -1883,6 +2241,374 @@
               "null"
             ],
             "format": "date-time"
+          }
+        }
+      },
+      "Price": {
+        "type": "object",
+        "required": [
+          "provider",
+          "unit_price",
+          "max_pages"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "unit_price": {
+            "type": "integer",
+            "description": "giri par appel (une page)"
+          },
+          "max_pages": {
+            "type": "integer",
+            "description": "pages achetables par recherche (1 pour OpenRouter, qui ne pagine pas)"
+          }
+        }
+      },
+      "CommunityWallet": {
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "role",
+          "balance",
+          "monthly_limit",
+          "spent_30d",
+          "pools"
+        ],
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "member"
+            ]
+          },
+          "balance": {
+            "type": "integer",
+            "description": "giri de la communauté"
+          },
+          "monthly_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "plafond du membre en giri sur 30 jours glissants, null : sans plafond"
+          },
+          "spent_30d": {
+            "type": "integer",
+            "description": "giri dépensés par le membre sur 30 jours, remboursements déduits"
+          },
+          "pools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "pools de la communauté, seuls payables par son portefeuille"
+          }
+        }
+      },
+      "Billing": {
+        "type": "object",
+        "required": [
+          "giri_per_eur",
+          "funding_url",
+          "max_queued",
+          "prices",
+          "personal",
+          "communities"
+        ],
+        "properties": {
+          "giri_per_eur": {
+            "type": "integer",
+            "description": "giri crédités pour 1 € de don ou d'achat"
+          },
+          "funding_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "page de don ou d'achat de giri"
+          },
+          "max_queued": {
+            "type": "integer",
+            "description": "recherches en attente au plus par client"
+          },
+          "prices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Price"
+            }
+          },
+          "personal": {
+            "type": "object",
+            "required": [
+              "balance"
+            ],
+            "properties": {
+              "balance": {
+                "type": "integer"
+              }
+            }
+          },
+          "communities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommunityWallet"
+            }
+          }
+        }
+      },
+      "WalletEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "delta",
+          "kind",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "delta": {
+            "type": "integer",
+            "description": "giri, positif au crédit"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "donation",
+              "purchase",
+              "debit",
+              "refund",
+              "adjustment"
+            ]
+          },
+          "amount_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "montant reçu, en centimes d'euro (don, achat)"
+          },
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "référence du paiement reçu"
+          },
+          "search_request_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "client": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "client qui a dépensé"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SearchRequest": {
+        "type": "object",
+        "required": [
+          "id",
+          "client",
+          "provider",
+          "query",
+          "pages",
+          "pool",
+          "community",
+          "unit_price",
+          "price",
+          "refunded",
+          "status",
+          "calls_done",
+          "results",
+          "new_urls",
+          "new_domains",
+          "in_pool",
+          "error",
+          "created_at",
+          "started_at",
+          "finished_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "client": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "pages": {
+            "type": "integer"
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "pool visé"
+          },
+          "community": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "communauté qui paie, null : portefeuille personnel"
+          },
+          "unit_price": {
+            "type": "integer"
+          },
+          "price": {
+            "type": "integer",
+            "description": "giri débités à l'achat"
+          },
+          "refunded": {
+            "type": "integer",
+            "description": "giri rendus (pages non lancées, échec, annulation)"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "calls_done": {
+            "type": "integer"
+          },
+          "results": {
+            "type": "integer"
+          },
+          "new_urls": {
+            "type": "integer"
+          },
+          "new_domains": {
+            "type": "integer"
+          },
+          "in_pool": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "URLs de la recherche présentes dans le pool visé après refresh"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "SearchRequestInput": {
+        "type": "object",
+        "required": [
+          "query",
+          "provider"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "provider": {
+            "type": "string",
+            "description": "un des providers de `GET /billing`"
+          },
+          "pages": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "pool": {
+            "type": "string",
+            "description": "pool visé (visible par le client) ; requis pour payer avec une communauté"
+          },
+          "community": {
+            "type": "string",
+            "description": "communauté dont le portefeuille paie ; absent : portefeuille personnel"
+          }
+        }
+      },
+      "RequestReceipt": {
+        "type": "object",
+        "required": [
+          "request",
+          "balance"
+        ],
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/SearchRequest"
+          },
+          "balance": {
+            "type": "integer",
+            "description": "solde du portefeuille débité"
+          }
+        }
+      },
+      "CancelReceipt": {
+        "type": "object",
+        "required": [
+          "request",
+          "refunded"
+        ],
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/SearchRequest"
+          },
+          "refunded": {
+            "type": "integer"
           }
         }
       }

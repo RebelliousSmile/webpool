@@ -12,7 +12,7 @@ const message = (err) => String(err?.message ?? err);
 
 // Un lot plus court que `batch` signale une file vide : les URLs en erreur
 // quittent l'état pending, la boucle se termine toujours.
-async function drain(step, batch) {
+export async function drain(step, batch) {
   const totals = { batches: 0 };
   for (;;) {
     const res = await step(batch);

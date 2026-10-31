@@ -34,6 +34,23 @@ describe('buildPoolQuery', () => {
     expect(values).toContain(10);
   });
 
+  it('include_requests : critères OU recherches du pool, domains_exclude toujours', () => {
+    const def = { theme: 'ia-generative', domains_exclude: ['pinterest.com'], include_requests: true };
+    const { text, values } = buildPoolQuery(def, { poolId: 7 });
+    expect(text).toMatch(/OR EXISTS \(SELECT 1 FROM url_source us JOIN search_request sr/);
+    expect(text).toMatch(/NOT \(ui\.domain = ANY/);
+    expect(values).toContain(7);
+    // chaque $n référencé a sa valeur
+    const max = Math.max(...[...text.matchAll(/\$(\d+)/g)].map((m) => Number(m[1])));
+    expect(max).toBe(values.length);
+    // sans pool connu (validation à la création) ou sans autre critère : aucun ajout
+    expect(buildPoolQuery(def).text).not.toContain('search_request');
+    const bare = buildPoolQuery({ include_requests: true }, { poolId: 7 });
+    expect(bare.text).not.toContain('search_request');
+    expect(bare.values).not.toContain(7);
+    expect(() => buildPoolQuery({ include_requests: 'oui' })).toThrow(/include_requests invalide : un booléen/);
+  });
+
   it('borne la limite à [1, 1000]', () => {
     expect(buildPoolQuery({ limit: 99999 }).values).toContain(1000);
     expect(buildPoolQuery({ limit: 0 }).values).toContain(1);

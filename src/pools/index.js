@@ -42,7 +42,7 @@ export async function refreshPool(slug) {
 
   await assertKnownFacets(pool.definition);
   return withRun('pool', { slug }, async (runId) => {
-    const { text, values } = buildPoolQuery(pool.definition);
+    const { text, values } = buildPoolQuery(pool.definition, { poolId: pool.id });
     const { rows: selected } = await query(text, values);
 
     await withTransaction(async (client) => {

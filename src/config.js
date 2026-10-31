@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { defaultDatabaseUrl, intEnv, loadDotEnv, ratioEnv, rootDir } from './env.js';
+import { defaultDatabaseUrl, intEnv, loadDotEnv, numberEnv, ratioEnv, rootDir } from './env.js';
 
 loadDotEnv();
 
@@ -60,6 +60,21 @@ export const config = Object.freeze({
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean),
+  // Recherches payantes (webpool requests) : prix d'un appel en giri entiers,
+  // coût du provider × cours USD→EUR × majoration × giri par euro, arrondi au-dessus.
+  giriPerEur: intEnv('WEBPOOL_GIRI_PER_EUR', 1000, 1),
+  usdEur: numberEnv('WEBPOOL_USD_EUR', 0.92, { min: 0, exclusive: true }),
+  priceMarkup: numberEnv('WEBPOOL_PRICE_MARKUP', 2, { min: 1 }),
+  // coûts par appel en USD qui remplacent ceux du code : "brave=0.005,searxng=0"
+  callCostsUsd: process.env.WEBPOOL_CALL_COST_USD ?? '',
+  requestProviders: (process.env.WEBPOOL_REQUEST_PROVIDERS || 'openrouter,brave')
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean),
+  requestMaxPages: intEnv('WEBPOOL_REQUEST_MAX_PAGES', 3, 1),
+  requestMaxQueued: intEnv('WEBPOOL_REQUEST_MAX_QUEUED', 5, 1),
+  // page de don ou d'achat de giri affichée par l'interface
+  fundingUrl: process.env.WEBPOOL_FUNDING_URL || null,
   userAgent: `webpool/${version} (+https://github.com/RebelliousSmile/webpool)`,
   version,
   // commit déployé, écrit par scripts/deploy.mjs dans REVISION ; null en développement

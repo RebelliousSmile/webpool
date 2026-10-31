@@ -341,6 +341,91 @@ Limites :
 - Les requêtes s'écrivent à la main. Les générer à partir du corpus est prévu
   dans une phase ultérieure.
 
+## Recherches payantes : dons et giri
+
+Les pools restent gratuits. Une **recherche** (requête envoyée à un provider,
+page par page) consomme des tokens : elle se paie d'avance en **giri**, l'unité
+entière du grand livre (1 € = `WEBPOOL_GIRI_PER_EUR` giri, 1 000 par défaut).
+
+- Un particulier crédite son portefeuille personnel par un **don**.
+- Une **communauté** achète des giri ; ses membres les dépensent pour ajouter des
+  recherches à ses pools, qu'ils voient sans accord individuel.
+
+```bash
+# Communauté, membres (plafond en giri sur 30 jours glissants), pools rattachés
+pnpm webpool community add --slug atelier --label "Atelier photo"
+pnpm webpool community join --slug atelier --name alice --role owner
+pnpm webpool community join --slug atelier --name bob --monthly 2000
+pnpm webpool community attach --slug atelier --pool nagasaki
+
+# Paiement reçu (Liberapay, Ko-fi, virement…) : don ou achat, crédité une seule fois par référence
+pnpm webpool wallet credit --name carol --eur 5 --ref liberapay:1234
+pnpm webpool wallet credit --community atelier --eur 20 --ref virement:2026-10-31
+pnpm webpool wallet adjust --community atelier --giri=-500 --note "geste commercial annulé"
+pnpm webpool wallet show --community atelier
+
+pnpm webpool pricing                      # prix d'un appel par provider
+pnpm webpool requests run [--offline]     # tâche planifiée : exécute les recherches payées
+pnpm webpool requests list [--status queued]
+pnpm webpool requests cancel --id 12      # recherche en attente, remboursée
+pnpm webpool billing report --days 30     # recettes, coût des providers, marge
+```
+
+**Prix.** Un appel coûte `max(1, ⌈coût USD × WEBPOOL_USD_EUR × WEBPOOL_PRICE_MARKUP × WEBPOOL_GIRI_PER_EUR⌉)`
+giri. Le coût par défaut est celui mesuré pour OpenRouter, selon le moteur
+(perplexity 0,0055 $, exa 0,0175 $, parallel 0,016 $), et le tarif public de
+Brave (0,005 $). Avec les défauts, un appel OpenRouter coûte 11 giri (0,011 €) et
+un appel Brave 10 giri. Les providers gratuits paient le plancher de 1 giri : ils
+consomment des quotas et le traitement du serveur. Le provider `file`, qui lit un
+fichier local, n'est jamais ouvert aux recherches. Le prix est figé sur la
+recherche à l'achat.
+
+**Achat** (`POST /api/v1/requests`, écran « Recherches » de datapool). Une
+recherche achète de 1 à `WEBPOOL_REQUEST_MAX_PAGES` pages (1 seule pour
+OpenRouter, qui ne pagine pas). Le prix est débité dans la transaction qui
+l'inscrit : solde insuffisant (402), plafond du membre atteint (402) ou trop de
+recherches en attente (429, `WEBPOOL_REQUEST_MAX_QUEUED`), et rien n'est écrit.
+Payée par une communauté, la recherche vise obligatoirement un pool de cette
+communauté. Son auteur peut l'annuler tant qu'elle attend, et il est alors
+remboursé.
+
+**Exécution.** `requests run` (toutes les 15 minutes, sous verrou consultatif)
+lance les recherches en attente dans l'ordre d'achat, page après page, avec
+l'exclusion des domaines saturés de l'exploration. Elle s'arrête au premier
+appel en échec ou à la première page vide ; les pages non lancées sont
+remboursées, sans repli vers un autre provider. Une recherche restée en cours
+plus d'une heure (processus interrompu) est close et remboursée de ses appels
+non faits. Viennent ensuite `normalize`, `classify` et `media`, puis le refresh
+des pools visés ; `in_pool` compte les URLs de la recherche présentes dans le
+pool. Le coût réel d'un appel OpenRouter (`usage.cost`) est enregistré, une
+estimation sinon : `billing report` compare recettes et coût.
+
+**Pools ouverts aux recherches.** Un pool est défini par des critères : une URL
+trouvée par une recherche n'y entre que si elle les remplit. Avec
+`"include_requests": true` dans sa définition, les URLs classées des recherches
+qui visent ce pool y entrent aussi ; `domains_exclude` s'applique toujours.
+L'option est désactivée par défaut : elle laisse quiconque voit le pool et paie y
+ajouter des liens.
+
+**Cadre.** Le « don » donne droit à un service : c'est un prépaiement, sans reçu
+fiscal, éventuellement soumis à la TVA selon le statut de l'éditeur. Le giri
+reste en circuit fermé : il ne se transfère pas, ne se rembourse pas en € et ne
+s'utilise qu'en recherches. Le paiement en ligne n'est pas intégré. L'admin
+crédite à réception du paiement ; `WEBPOOL_FUNDING_URL` donne à l'interface le
+lien de la page de don ou d'achat. Plan, pistes écartées et remise en question :
+[`aidd_docs/tasks/2026_10/2026_10_31_recherches-payantes/plan.md`](aidd_docs/tasks/2026_10/2026_10_31_recherches-payantes/plan.md).
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `WEBPOOL_GIRI_PER_EUR` | 1000 | giri crédités pour 1 € |
+| `WEBPOOL_USD_EUR` | 0.92 | cours appliqué au coût des providers |
+| `WEBPOOL_PRICE_MARKUP` | 2 | majoration du coût (≥ 1) : frais de paiement, appels sans résultat, cours |
+| `WEBPOOL_CALL_COST_USD` | aucun | coûts par appel qui remplacent ceux du code : `brave=0.004,openrouter:exa=0.02` |
+| `WEBPOOL_REQUEST_PROVIDERS` | `openrouter,brave` | providers ouverts aux recherches (`file` toujours exclu) |
+| `WEBPOOL_REQUEST_MAX_PAGES` | 3 | pages achetables par recherche |
+| `WEBPOOL_REQUEST_MAX_QUEUED` | 5 | recherches en attente au plus par client |
+| `WEBPOOL_FUNDING_URL` | aucune | page de don ou d'achat de giri affichée par datapool |
+
 ## Médias des liens
 
 La normalisation en ligne lit le `<head>` de chaque page : description
@@ -375,7 +460,7 @@ communautés, plateformes vidéo, presse et guides, autres) se calcule à la lec
 depuis le domaine (`src/media/kinds.js`) : enrichir la liste ne demande aucune
 reprise du corpus.
 
-## API HTTP (lecture seule)
+## API HTTP
 
 `webpool serve` expose le corpus et les pools en JSON, pour l'interface
 [datapool](https://github.com/RebelliousSmile/datapool) ou pour des clients. Le
@@ -392,8 +477,8 @@ curl -H "Authorization: Bearer wp_…" http://127.0.0.1:3000/api/v1/admin/stats
 
 **Clients.** Chaque client a sa clé ; la base n'en garde que l'empreinte SHA-256
 (`api_client`). Un client `admin` voit tout. Un client `read` ne voit que les pools
-qui lui sont accordés, sans leur définition ni leurs scores ; un pool non accordé
-répond 404.
+qui lui sont accordés ou qui appartiennent à une de ses communautés, sans leur
+définition ni leurs scores ; un autre pool répond 404.
 
 ```bash
 pnpm webpool client add --name client-a            # scope read par défaut
@@ -410,15 +495,23 @@ pnpm webpool client revoke --name client-a
 | `/pools`, `/pools/{slug}` | read | pools visibles ; volumes, domaines principaux, répartition de l'usage commercial |
 | `/pools/{slug}/export?format=json\|csv\|md\|txt` | read | le pool entier dans l'ordre de rang, sans définition ni score (`txt` : une URL par ligne) |
 | `/pools/{slug}/items` | read | URLs rangées, paginées (`limit` ≤ 500, `offset`), avec description, type de média, famille de source, vignette et favicon |
+| `/billing` | read | prix des recherches, solde personnel, communautés (rôle, solde, plafond, dépense sur 30 jours) |
+| `/billing/entries?community=` | read | grand livre personnel, ou de la communauté pour ses propriétaires |
+| `GET /requests?community=&status=` | read | recherches du client, ou de la communauté pour ses propriétaires |
+| `POST /requests` | read | achète une recherche (`{query, provider, pages, pool, community}`), 201 |
+| `DELETE /requests/{id}` | read | annule une recherche en attente, remboursée |
 | `/admin/stats` | admin | volumes pour un tableau de bord |
 | `/admin/pools/{slug}/export?format=json\|csv\|md\|txt` | admin | export de `pool export`, définition et scores compris |
 | `/admin/urls`, `/admin/urls/{id}` | admin | corpus filtré (`status`, `theme`, `facet=slug:valeur`, `domain`, `q`, `order`) ; fiche : sources, thèmes, facettes, pools |
 | `/admin/themes`, `/admin/facets` | admin | taxonomie en arbre, valeurs de facettes, avec volumes |
 | `/admin/domains` | admin | registre (`to_qualify`, `excluded`, `usage`, `q`) |
 | `/admin/queries`, `/admin/runs` | admin | frontière d'exploration, historique du pipeline |
+| `/admin/requests` | admin | toutes les recherches payantes |
 
 Les erreurs sont en JSON (`{"error": {"code", "message"}}`) : 400 paramètre
-invalide, 401 jeton absent ou révoqué, 403 route admin, 404, 405. Une erreur
+invalide, 401 jeton absent ou révoqué, 402 giri insuffisants, 403 route admin,
+404, 405, 413 corps de plus de 8 Ko, 415 corps autre que JSON, 429 trop de
+recherches en attente. Une erreur
 interne répond 500 sans détail ; le détail part dans le journal du serveur, qui
 trace une ligne par requête (méthode, chemin, statut, durée, client).
 
@@ -428,8 +521,10 @@ trace une ligne par requête (méthode, chemin, statut, durée, client).
 | `WEBPOOL_API_HOST` | `IP`, sinon 127.0.0.1 | adresse d'écoute (`--host`) |
 | `WEBPOOL_API_CORS_ORIGINS` | aucune | origines autorisées, séparées par des virgules (ex. l'URL de datapool) |
 
-L'API ne fait que lire : pour aller plus loin, la base peut être ouverte au serveur
-par un rôle PostgreSQL limité à `SELECT`. Elle se déploie comme un site Node.js
+L'API lit le corpus et n'écrit que les recherches payantes. Pour aller plus loin,
+la base peut être ouverte au serveur par un rôle PostgreSQL limité à `SELECT`, plus
+`INSERT, UPDATE` sur `search_request`, `wallet` et `wallet_entry` et `USAGE` sur
+leurs séquences. Elle se déploie comme un site Node.js
 (voir *Déploiement*) ; `/api/v1/health` renvoie la version et le commit livré.
 
 ## Déploiement (alwaysdata)
@@ -526,7 +621,7 @@ termine aussi par un redémarrage du site.
 1. créer le site Node.js ci-dessus et compléter `~/www/webpool.env`
    (`WEBPOOL_MEDIA_DIR`, `WEBPOOL_API_CORS_ORIGINS`) ;
 2. `pnpm deploy:prod ad` (prévisualisation), puis `--apply` : migrations jusqu'à
-   `008`, bascule, redémarrage, contrôle de `/health` ;
+   `009`, bascule, redémarrage, contrôle de `/health` ;
 3. sur la cible, créer la clé d'accès :
    `cd ~/www/webpool && NODEJS_VERSION=24 node bin/webpool.js client add --name <nom> --scope admin`
    (le jeton n'est affiché qu'une fois) ;
@@ -549,7 +644,12 @@ créée dans l'admin, pas par le script de déploiement :
 | Fréquence | `0 4 * * 1` (lundi, 4 h) |
 
 Avec 20 appels par semaine, le coût reste autour de 0,11 $ (OpenRouter, moteur
-Perplexity). Ne pas déployer pendant un passage : la tâche tourne dans le
+Perplexity).
+
+Les recherches payantes ont leur propre tâche, à la même configuration :
+commande `node bin/webpool.js requests run`, fréquence `*/15 * * * *`. Un verrou
+consultatif empêche deux exécutions simultanées ; la tâche ne fait rien sans
+recherche en attente. Ne pas déployer pendant un passage : la tâche tourne dans le
 répertoire que la bascule remplace.
 
 `cycle` explore, normalise, classe et rafraîchit tous les pools. Pour une chaîne
@@ -564,7 +664,7 @@ sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
 
 | Chemin | Rôle |
 |---|---|
-| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) ; `002` à `008` : domain_profile, search_query, search_query_run, exclusion_hash, api_client, tuyaux, url_media |
+| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) ; `002` à `009` : domain_profile, search_query, search_query_run, exclusion_hash, api_client, tuyaux, url_media, communautés, portefeuilles et recherches payantes |
 | `src/ingest/` | Providers SERP (`file`, `brave`, `searxng`, `europeana`, `flickr`, `openrouter`) + insertion tracée |
 | `src/normalize/` | Canonisation stricte (tracking, redirections, dédup domaine+canonique), fetch poli |
 | `src/classify/` | Classifieur par règles piloté par `config/taxonomy.json` |
@@ -573,8 +673,10 @@ sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
 | `src/domains/` | Registre des domaines et facette `usage-commercial` |
 | `src/media/` | Type de média et famille de source (`kinds.js`), réduction d'images (`thumbnail.js`, sharp), cache `webpool media` |
 | `src/cycle/` | `cycle` : explore, normalize, classify, media, refresh des pools |
+| `src/billing/` | Prix des recherches (`pricing.js`, pur), communautés, portefeuilles et grand livre des giri, rapport |
+| `src/requests/` | Recherches payantes : achat, annulation, exécution (`requests run`) |
 | `src/pools/` | Définition JSON → SQL paramétré → matérialisation rangée → export |
-| `src/api/` | API HTTP en lecture seule (`serve`), clients et jetons ; routeur, paramètres et serveur testables sans base |
+| `src/api/` | API HTTP (`serve`), clients et jetons ; routeur, paramètres et serveur testables sans base |
 | `openapi.json` | Contrat de l'API |
 | `bin/webpool.js` | CLI |
 | `scripts/deploy.mjs` | Déploiement alwaysdata (`pnpm deploy:prod`), fonctions pures dans `deploy-lib.mjs` |

@@ -7,6 +7,9 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions [Sem
 
 ### Added
 
+- Recherches payantes : les pools restent gratuits, une recherche se paie d'avance en giri (1 € = 1 000 giri), sur le portefeuille d'un client (don) ou d'une communauté (achat). Prix d'un appel = coût du provider majoré (`WEBPOOL_PRICE_MARKUP`), pages non lancées et appels en échec remboursés. Communautés (`webpool community`), membres avec plafond sur 30 jours, pools visibles par les membres ; grand livre (`webpool wallet credit|adjust|show`, référence de paiement unique) ; `webpool pricing`, `webpool requests run|list|cancel`, `webpool billing report` ; critère de pool `include_requests` ; coût réel des appels OpenRouter (`usage.cost`) ; migration `009_billing`.
+- API : `GET /billing`, `GET /billing/entries`, `GET|POST /requests`, `DELETE /requests/{id}`, `GET /admin/requests` ; corps JSON borné à 8 Ko, prévol CORS par chemin (`POST`, `DELETE`, en-tête `Content-Type`).
+
 - Export des pools ouvert aux clients `read` (`GET /api/v1/pools/{slug}/export`), sans définition ni score ; format `txt` (une URL par ligne) pour l'API et `pool export` ; usage commercial dans le corpus (`/admin/urls`).
 - Déploiement de l'API : site Node.js alwaysdata (`webpool serve`), redémarré après la bascule (API alwaysdata avec `ALWAYSDATA_API_TOKEN` local et `apiSiteId`, sinon consigne), contrôle de `/health` qui renvoie la version et le commit livré (`REVISION`) ; cache de médias créé et `WEBPOOL_MEDIA_DIR` vérifié ; opération `deploy:api` au contrat.
 - Médias des liens : description, type de média, langue et nom du site lus à la normalisation ; vignettes (aperçu de la page, sinon vignette du provider) et favicons mis en cache en WebP par `webpool media` (étape de `cycle`) ; champs `description`, `media_type`, `source`, `thumbnail`, `favicon` dans l'API, fichiers servis par `/api/v1/media/{empreinte}.webp` ; migration `008_url_media`, dépendance `sharp`.
@@ -18,6 +21,7 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions [Sem
 
 ### Fixed
 
+- `/admin/runs?kind=media` refusé alors que `webpool media` trace des runs `media`.
 - `openapi.json` livré au déploiement : `/api/v1/openapi.json` aurait répondu 500 en production.
 - Test des critères `recent` : la regex contenait un caractère de contrôle au lieu de `\b` et ne vérifiait rien.
 - Une variable `PORT` invalide n'arrête plus les commandes quand `WEBPOOL_API_PORT` est défini.

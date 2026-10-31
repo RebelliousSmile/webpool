@@ -36,6 +36,18 @@ export function intEnv(name, fallback, min = 0, env = process.env) {
   return value;
 }
 
+// Nombre décimal lu dans l'environnement, borné par `min` (exclu si `exclusive`) ;
+// une valeur invalide arrête net.
+export function numberEnv(name, fallback, { min = 0, exclusive = false } = {}, env = process.env) {
+  const raw = env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || (exclusive ? value <= min : value < min)) {
+    throw new Error(`${name} doit être un nombre ${exclusive ? '>' : '≥'} ${min} (reçu : "${raw}")`);
+  }
+  return value;
+}
+
 // Fraction lue dans l'environnement, entre 0 et 1 ; une valeur invalide arrête net.
 export function ratioEnv(name, fallback, env = process.env) {
   const raw = env[name];

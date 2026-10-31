@@ -33,7 +33,10 @@ export const providers = {
 // `sentQuery` (requête augmentée d'exclusions) part au provider ; seule
 // `searchQuery` est tracée. `excludeDomains` part aux providers qui filtrent par
 // paramètre (OpenRouter) plutôt que par `-site:`.
-export async function ingest({ provider = 'file', searchQuery, sentQuery, excludeDomains, input, limit, page = 0 }) {
+// `requestId` rattache les sources à une recherche payante (search_request).
+// Un provider peut renvoyer { results, costUsd } : le coût réel de l'appel est
+// alors rendu (null sinon).
+export async function ingest({ provider = 'file', searchQuery, sentQuery, excludeDomains, input, limit, page = 0, requestId = null }) {
   const impl = providers[provider];
   if (!impl) {
     throw new Error(`Provider inconnu : ${provider} (disponibles : ${Object.keys(providers).join(', ')})`);
@@ -44,9 +47,12 @@ export async function ingest({ provider = 'file', searchQuery, sentQuery, exclud
     provider, query: searchQuery, page,
     ...(sentQuery ? { sentQuery } : {}),
     ...(excludeDomains?.length ? { excludeDomains } : {}),
+    ...(requestId !== null ? { requestId } : {}),
   };
   return withRun('ingest', detail, async (runId) => {
-    const results = await impl.search({ query: sentQuery ?? searchQuery, excludeDomains, input, limit, page });
+    const out = await impl.search({ query: sentQuery ?? searchQuery, excludeDomains, input, limit, page });
+    const results = Array.isArray(out) ? out : out.results;
+    const costUsd = Array.isArray(out) ? null : (out.costUsd ?? null);
     const urls = results.map((r) => r.url);
     let inserted = 0;
     let newDomains = 0;
@@ -71,9 +77,9 @@ export async function ingest({ provider = 'file', searchQuery, sentQuery, exclud
       );
       const idByUrl = new Map(rows.map((r) => [r.raw_url, r.id]));
       await client.query(
-        `INSERT INTO url_source (url_item_id, provider, query, serp_rank, run_id)
-         SELECT item_id, $3, $4, serp_rank, $5 FROM unnest($1::bigint[], $2::int[]) AS t(item_id, serp_rank)`,
-        [urls.map((u) => idByUrl.get(u)), results.map((r) => r.rank ?? null), provider, searchQuery, runId],
+        `INSERT INTO url_source (url_item_id, provider, query, serp_rank, run_id, search_request_id)
+         SELECT item_id, $3, $4, serp_rank, $5, $6 FROM unnest($1::bigint[], $2::int[]) AS t(item_id, serp_rank)`,
+        [urls.map((u) => idByUrl.get(u)), results.map((r) => r.rank ?? null), provider, searchQuery, runId, requestId],
       );
       // Vignettes fournies par le provider : repli de l'aperçu de la page,
       // http(s) seulement, la première connue d'une URL fait foi.
@@ -93,6 +99,6 @@ export async function ingest({ provider = 'file', searchQuery, sentQuery, exclud
     });
     const existing = results.length - inserted;
 
-    return { inserted, existing, total: results.length, newDomains };
+    return { inserted, existing, total: results.length, newDomains, ...(costUsd !== null ? { costUsd } : {}) };
   });
 }

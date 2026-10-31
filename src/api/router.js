@@ -14,7 +14,8 @@ export function compileRoute({ method, path, ...rest }) {
 }
 
 // { route, params } si la route existe ; { allowed } si le chemin existe pour
-// d'autres méthodes ; null sinon. Un segment mal encodé lève URIError.
+// d'autres méthodes (toujours pour OPTIONS : les méthodes du prévol) ; null
+// sinon. Un segment mal encodé lève URIError.
 export function matchRoute(routes, method, pathname) {
   const allowed = [];
   for (const route of routes) {

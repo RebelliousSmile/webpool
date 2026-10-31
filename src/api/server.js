@@ -25,6 +25,29 @@ function send(res, status, body, headers = {}) {
   res.end(payload);
 }
 
+// Corps JSON d'un POST : borné, et seulement en application/json (un formulaire
+// HTML d'un autre site ne peut pas l'envoyer sans prévol).
+export const MAX_BODY_BYTES = 8192;
+const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH']);
+
+async function readJson(req) {
+  if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) {
+    throw new ApiError(415, 'unsupported_media_type', 'Corps attendu en application/json');
+  }
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) throw new ApiError(413, 'payload_too_large', `Corps limité à ${MAX_BODY_BYTES} octets`);
+    chunks.push(chunk);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8') || 'null');
+  } catch {
+    throw new ApiError(400, 'bad_request', 'Corps JSON invalide');
+  }
+}
+
 const sendError = (res, err, headers) =>
   send(res, err.status, { error: { code: err.code, message: err.message } }, headers);
 
@@ -46,28 +69,28 @@ export function createApiServer({ routes, authenticate, corsOrigins = [], log = 
       const url = new URL(req.url, 'http://localhost');
       let match;
       try {
-        match = matchRoute(routes, req.method === 'OPTIONS' ? 'GET' : req.method, url.pathname);
+        match = matchRoute(routes, req.method, url.pathname);
       } catch {
         throw new ApiError(400, 'bad_request', 'Chemin mal encodé');
       }
       if (!match) throw new ApiError(404, 'not_found', 'Route inconnue');
+
+      // Prévol CORS : sans authentification, le navigateur n'envoie pas le jeton.
+      if (req.method === 'OPTIONS' && match.allowed) {
+        res.writeHead(204, {
+          ...BASE_HEADERS,
+          ...cors,
+          'Access-Control-Allow-Methods': [...new Set(match.allowed)].join(', '),
+          'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+          'Access-Control-Max-Age': '600',
+        });
+        return res.end();
+      }
       if (match.allowed) {
         return sendError(res, new ApiError(405, 'method_not_allowed', 'Méthode non autorisée'), {
           ...cors,
           Allow: [...new Set(match.allowed)].join(', '),
         });
-      }
-
-      // Prévol CORS : sans authentification, le navigateur n'envoie pas le jeton.
-      if (req.method === 'OPTIONS') {
-        res.writeHead(204, {
-          ...BASE_HEADERS,
-          ...cors,
-          'Access-Control-Allow-Methods': 'GET',
-          'Access-Control-Allow-Headers': 'Authorization',
-          'Access-Control-Max-Age': '600',
-        });
-        return res.end();
       }
 
       const { route, params } = match;
@@ -84,7 +107,8 @@ export function createApiServer({ routes, authenticate, corsOrigins = [], log = 
         }
       }
 
-      const result = await route.handler({ client, params, query: url.searchParams });
+      const body = BODY_METHODS.has(req.method) ? await readJson(req) : undefined;
+      const result = await route.handler({ client, params, query: url.searchParams, body });
       if (result.raw !== undefined) {
         return send(res, 200, result.raw, {
           ...cors,

@@ -9,7 +9,11 @@ import { USAGE_VALUES } from '../domains/index.js';
 import { QUERY_STATUSES, listQueries } from '../explore/index.js';
 import { formatPool, FORMATS } from '../pools/export.js';
 import { loadPoolForExport } from '../pools/index.js';
+import { BillingError, currentPrices, walletEntries, walletsFor } from '../billing/index.js';
+import { REQUEST_STATUSES, cancelRequest, createRequest, listRequests } from '../requests/index.js';
 import {
+  ApiError,
+  badRequest,
   boolParam,
   enumParam,
   facetParams,
@@ -25,7 +29,7 @@ import {
 // { body } (JSON) ou { raw, contentType, filename }.
 
 const URL_STATUSES = ['pending', 'normalized', 'classified', 'duplicate', 'error'];
-const RUN_KINDS = ['ingest', 'normalize', 'classify', 'pool', 'explore'];
+const RUN_KINDS = ['ingest', 'normalize', 'classify', 'pool', 'explore', 'media', 'request'];
 const RUN_STATUSES = ['running', 'done', 'failed'];
 const URL_ORDERS = {
   recent: 'ui.first_seen_at DESC, ui.id DESC',
@@ -78,14 +82,19 @@ export async function me({ client }) {
   return { body: { name: client.name, scope: client.scope } };
 }
 
-// --- Pools : visibles par l'admin, ou accordés au client `read`.
+// --- Pools : visibles par l'admin, accordés au client `read`, ou pools d'une
+// communauté dont il est membre.
+
+const GRANTED_SQL = (clientParam) => `(EXISTS (SELECT 1 FROM api_client_pool cp WHERE cp.pool_id = p.id AND cp.api_client_id = ${clientParam})
+         OR EXISTS (SELECT 1 FROM community_pool cp JOIN community_member cm ON cm.community_id = cp.community_id
+                     WHERE cp.pool_id = p.id AND cm.api_client_id = ${clientParam}))`;
 
 async function visiblePool(client, slug) {
   const { rows } = await query(
     `SELECT p.id, p.slug, p.label, p.definition, p.created_at, p.refreshed_at
        FROM pool p
       WHERE p.slug = $1
-        AND ($2 OR EXISTS (SELECT 1 FROM api_client_pool cp WHERE cp.pool_id = p.id AND cp.api_client_id = $3))`,
+        AND ($2 OR ${GRANTED_SQL('$3')})`,
     [slug, isAdmin(client), client.id],
   );
   // Un pool non accordé est introuvable : son existence n'est pas révélée.
@@ -98,7 +107,7 @@ export async function listPools({ client }) {
     `SELECT p.slug, p.label, p.refreshed_at, count(pi.url_item_id)::int AS items
        FROM pool p
        LEFT JOIN pool_item pi ON pi.pool_id = p.id
-      WHERE $1 OR EXISTS (SELECT 1 FROM api_client_pool cp WHERE cp.pool_id = p.id AND cp.api_client_id = $2)
+      WHERE $1 OR ${GRANTED_SQL('$2')}
       GROUP BY p.id ORDER BY p.slug`,
     [isAdmin(client), client.id],
   );
@@ -465,4 +474,108 @@ export async function getMedia({ params }) {
     contentType: 'image/webp',
     headers: { 'Cache-Control': 'public, max-age=31536000, immutable' },
   };
+}
+
+// --- Recherches payantes : prix, portefeuilles, recherches du client.
+
+// Codes métier → statuts HTTP. 402 : il faut des giri (solde ou plafond).
+const BILLING_STATUS = { invalid: 400, not_found: 404, insufficient_balance: 402, spend_limit: 402, too_many_queued: 429 };
+
+async function billingCall(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof BillingError) throw new ApiError(BILLING_STATUS[err.code] ?? 400, err.code, err.message);
+    throw err;
+  }
+}
+
+export async function billing({ client }) {
+  const wallets = await walletsFor(client.id);
+  return {
+    body: {
+      giri_per_eur: config.giriPerEur,
+      funding_url: config.fundingUrl,
+      max_queued: config.requestMaxQueued,
+      prices: currentPrices().map(({ provider, unit_price, max_pages }) => ({ provider, unit_price, max_pages })),
+      personal: wallets.personal,
+      communities: wallets.communities,
+    },
+  };
+}
+
+// Communauté dont le client est membre (propriétaire si `owner`), sinon 404.
+async function membership(client, slug, { owner = false } = {}) {
+  const { rows } = await query(
+    `SELECT c.id, cm.role, w.id AS wallet_id FROM community c
+       JOIN community_member cm ON cm.community_id = c.id AND cm.api_client_id = $2
+       LEFT JOIN wallet w ON w.community_id = c.id
+      WHERE c.slug = $1`,
+    [slug, client.id],
+  );
+  if (rows.length === 0 || (owner && rows[0].role !== 'owner')) {
+    throw notFound(owner ? `Communauté inconnue ou réservée à ses propriétaires : ${slug}` : `Communauté inconnue : ${slug}`);
+  }
+  return { id: Number(rows[0].id), walletId: rows[0].wallet_id === null ? null : Number(rows[0].wallet_id) };
+}
+
+// Grand livre du portefeuille personnel, ou de la communauté pour ses propriétaires.
+export async function listBillingEntries({ client, query: qs }) {
+  const page = pageParams(qs);
+  const community = qs.get('community');
+  let walletId;
+  if (community) {
+    walletId = (await membership(client, community, { owner: true })).walletId;
+  } else {
+    const { rows } = await query('SELECT id FROM wallet WHERE api_client_id = $1', [client.id]);
+    walletId = rows[0] ? Number(rows[0].id) : null;
+  }
+  if (walletId === null) return { body: paged([], 0, page) };
+  const { items, total } = await walletEntries({ walletId, ...page });
+  return { body: paged(items.map((e) => ({ ...e, created_at: iso(e.created_at) })), total, page) };
+}
+
+// Recherches du client, ou de toute la communauté pour ses propriétaires.
+export async function listClientRequests({ client, query: qs }) {
+  const page = pageParams(qs);
+  const status = enumParam(qs, 'status', REQUEST_STATUSES);
+  const community = qs.get('community');
+  const scope = community ? { communityId: (await membership(client, community, { owner: true })).id } : { clientId: client.id };
+  const { items, total } = await listRequests({ ...scope, status, ...page });
+  return { body: paged(items, total, page) };
+}
+
+export async function postRequest({ client, body }) {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) throw badRequest('Objet JSON attendu');
+  const known = new Set(['query', 'provider', 'pages', 'pool', 'community']);
+  const unknown = Object.keys(body).filter((k) => !known.has(k));
+  if (unknown.length) throw badRequest(`Champ inconnu : ${unknown.join(', ')}`);
+  for (const key of ['query', 'provider', 'pool', 'community']) {
+    if (body[key] != null && typeof body[key] !== 'string') throw badRequest(`${key} doit être une chaîne`);
+  }
+  const res = await billingCall(() =>
+    createRequest({
+      clientId: client.id,
+      isAdmin: isAdmin(client),
+      provider: body.provider,
+      query: body.query,
+      pages: body.pages,
+      pool: body.pool || undefined,
+      community: body.community || undefined,
+    }),
+  );
+  return { status: 201, body: res };
+}
+
+export async function deleteRequest({ client, params }) {
+  const id = idParam(params.id);
+  return { body: await billingCall(() => cancelRequest({ id, clientId: client.id })) };
+}
+
+// Toutes les recherches, pour l'admin.
+export async function listAllRequests({ query: qs }) {
+  const page = pageParams(qs);
+  const status = enumParam(qs, 'status', REQUEST_STATUSES);
+  const { items, total } = await listRequests({ status, ...page });
+  return { body: paged(items, total, page) };
 }

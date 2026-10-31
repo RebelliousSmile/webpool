@@ -89,6 +89,7 @@
         "remote Node satisfies ^22.12.0 || >=24 under NODEJS_VERSION",
         "git archive of the commit plus `pnpm install --prod --frozen-lockfile` succeed in a native Linux WSL staging directory (not DrvFs)",
         "the alwaysdata scheduled task (`node bin/webpool.js cycle --budget 20` in ~/www/webpool, NODEJS_VERSION=24, cron `0 4 * * 1`) is not running: it is target-authoritative, created in the admin and never deployed, and it runs from the directory the swap replaces",
+        "the alwaysdata scheduled task `node bin/webpool.js requests run` (same directory and environment, cron `*/15 * * * *`) is not running: same lifecycle as the cycle task; a run interrupted by the swap leaves its search requests `running`, closed and refunded by the next run after one hour",
         "~/www/webpool-data (example queries and pool definitions imported on the target) is target-authoritative and outside the swapped ~/www/webpool; it is never shipped nor deleted",
         "WEBPOOL_MEDIA_DIR in ~/www/webpool.env is the absolute path of the target mediaDir (default ~/www/webpool-data/media, outside the swapped ~/www/webpool); read on the target by node, only WEBPOOL_MEDIA_DIR and WEBPOOL_API_CORS_ORIGINS leave the file"
       ],

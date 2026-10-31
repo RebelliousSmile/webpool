@@ -87,12 +87,15 @@ describe('routeur', () => {
 describe('openapi.json', () => {
   it('décrit exactement les routes servies', () => {
     const doc = JSON.parse(fs.readFileSync(OPENAPI_PATH, 'utf8'));
-    const documented = Object.keys(doc.paths).map((p) => `/api/v1${p.replace(/\{(\w+)\}/g, ':$1')}`);
-    expect(documented.sort()).toEqual(routes.map((r) => r.path).sort());
-    const publicPaths = Object.entries(doc.paths)
-      .filter(([, v]) => Array.isArray(v.get.security) && v.get.security.length === 0)
-      .map(([p]) => `/api/v1${p.replace(/\{(\w+)\}/g, ':$1')}`);
-    expect(publicPaths.sort()).toEqual(routes.filter((r) => !r.scope).map((r) => r.path).sort());
+    const route = (p) => `/api/v1${p.replace(/\{(\w+)\}/g, ':$1')}`;
+    const operations = Object.entries(doc.paths).flatMap(([p, ops]) =>
+      Object.entries(ops).map(([method, op]) => ({ key: `${method.toUpperCase()} ${route(p)}`, op })),
+    );
+    expect(operations.map((o) => o.key).sort()).toEqual(routes.map((r) => `${r.method} ${r.path}`).sort());
+    const publicOps = operations
+      .filter(({ op }) => Array.isArray(op.security) && op.security.length === 0)
+      .map((o) => o.key);
+    expect(publicOps.sort()).toEqual(routes.filter((r) => !r.scope).map((r) => `${r.method} ${r.path}`).sort());
   });
 });
 
@@ -106,6 +109,8 @@ describe('serveur', () => {
     { path: '/raw', scope: null, handler: async () => ({ raw: 'a,b\n', contentType: 'text/csv', filename: 'p.csv' }) },
     { path: '/boom', scope: null, handler: async () => { throw new Error('détail interne'); } },
     { path: '/bad', scope: null, handler: async () => { throw new ApiError(400, 'bad_request', 'mauvais'); } },
+    { path: '/echo/:x', method: 'POST', scope: 'read', handler: async ({ body }) => ({ status: 201, body: { got: body } }) },
+    { path: '/item/:x', method: 'DELETE', scope: 'read', handler: async ({ params }) => ({ body: { deleted: params.x } }) },
   ].map((r) => compileRoute({ method: 'GET', ...r }));
   let server;
   let base;
@@ -178,6 +183,29 @@ describe('serveur', () => {
     expect(await res.text()).toBe('a,b\n');
   });
 
+  it('lit un corps JSON borné, en application/json seulement', async () => {
+    const post = (body, type = 'application/json', token = 'tok-read') =>
+      fetch(`${base}/echo/a`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': type }, body });
+    const ok = await post(JSON.stringify({ q: 1 }));
+    expect(ok.status).toBe(201);
+    expect(await ok.json()).toEqual({ got: { q: 1 } });
+    expect((await post('{"q":', 'application/json')).status).toBe(400);
+    expect((await post('q=1', 'application/x-www-form-urlencoded')).status).toBe(415);
+    expect((await post(JSON.stringify({ q: 'x'.repeat(9000) }))).status).toBe(413);
+    // l'authentification passe avant la lecture du corps
+    expect((await post('{}', 'application/json', 'nope')).status).toBe(401);
+    const del = await fetch(`${base}/item/3`, { method: 'DELETE', headers: { Authorization: 'Bearer tok-read' } });
+    expect(await del.json()).toEqual({ deleted: '3' });
+  });
+
+  it('prévol : méthodes du chemin, en-têtes Authorization et Content-Type', async () => {
+    const pre = await fetch(`${base}/echo/a`, { method: 'OPTIONS', headers: { Origin: 'https://datapool.test' } });
+    expect(pre.status).toBe(204);
+    expect(pre.headers.get('access-control-allow-methods')).toBe('GET, POST');
+    expect((await fetch(`${base}/item/3`, { method: 'OPTIONS' })).headers.get('access-control-allow-methods')).toBe('DELETE');
+    expect((await fetch(`${base}/nope`, { method: 'OPTIONS' })).status).toBe(404);
+  });
+
   it("n'autorise CORS que pour les origines configurées", async () => {
     const ok = await get('/open', null, { Origin: 'https://datapool.test' });
     expect(ok.headers.get('access-control-allow-origin')).toBe('https://datapool.test');
@@ -186,7 +214,8 @@ describe('serveur', () => {
 
     const preflight = await fetch(`${base}/admin`, { method: 'OPTIONS', headers: { Origin: 'https://datapool.test' } });
     expect(preflight.status).toBe(204);
-    expect(preflight.headers.get('access-control-allow-headers')).toBe('Authorization');
+    expect(preflight.headers.get('access-control-allow-headers')).toBe('Authorization, Content-Type');
+    expect(preflight.headers.get('access-control-allow-methods')).toBe('GET');
     expect(preflight.headers.get('access-control-allow-origin')).toBe('https://datapool.test');
   });
 });
