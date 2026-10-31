@@ -1,9 +1,10 @@
 import fs from 'node:fs';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { bearerToken, generateToken, hashToken } from '../src/api/clients.js';
 import { facetParams, likePattern, pageParams, boolParam, enumParam, ApiError } from '../src/api/params.js';
 import { compileRoute, matchRoute } from '../src/api/router.js';
-import { createApiServer } from '../src/api/server.js';
+import { createRateLimiter } from '../src/api/rateLimit.js';
+import { clientAddress, containsNul, createApiServer } from '../src/api/server.js';
 import { OPENAPI_PATH, routes } from '../src/api/index.js';
 
 const qs = (s) => new URLSearchParams(s);
@@ -109,6 +110,7 @@ describe('serveur', () => {
     { path: '/raw', scope: null, handler: async () => ({ raw: 'a,b\n', contentType: 'text/csv', filename: 'p.csv' }) },
     { path: '/boom', scope: null, handler: async () => { throw new Error('détail interne'); } },
     { path: '/bad', scope: null, handler: async () => { throw new ApiError(400, 'bad_request', 'mauvais'); } },
+    { path: '/pg/:code', scope: null, handler: async ({ params }) => { throw Object.assign(new Error('invalid byte sequence for encoding "UTF8": 0x00'), { code: params.code }); } },
     { path: '/echo/:x', method: 'POST', scope: 'read', handler: async ({ body }) => ({ status: 201, body: { got: body } }) },
     { path: '/item/:x', method: 'DELETE', scope: 'read', handler: async ({ params }) => ({ body: { deleted: params.x } }) },
   ].map((r) => compileRoute({ method: 'GET', ...r }));
@@ -217,5 +219,167 @@ describe('serveur', () => {
     expect(preflight.headers.get('access-control-allow-headers')).toBe('Authorization, Content-Type');
     expect(preflight.headers.get('access-control-allow-methods')).toBe('GET');
     expect(preflight.headers.get('access-control-allow-origin')).toBe('https://datapool.test');
+  });
+
+  describe('octet NUL', () => {
+    const expectNul = async (res) => {
+      expect(res.status).toBe(400);
+      expect((await res.json()).error.code).toBe('bad_request');
+    };
+    // Le test /boom a déjà journalisé une erreur interne : seul ce qui suit compte.
+    let from = 0;
+    beforeEach(() => {
+      from = logs.length;
+    });
+    const noStack = () => expect(logs.slice(from).some((l) => l.startsWith('Erreur interne'))).toBe(false);
+
+    it('refuse %00 dans le chemin', async () => {
+      await expectNul(await get('/echo/a%00b', 'tok-read'));
+      noStack();
+    });
+
+    it('refuse %00 dans un paramètre, nom ou valeur, même sur une route publique', async () => {
+      await expectNul(await get('/echo/a?q=x%00', 'tok-read'));
+      await expectNul(await get('/echo/a?q%00=x', 'tok-read'));
+      await expectNul(await get('/open?x=%00'));
+      noStack();
+    });
+
+    it('refuse \\u0000 dans le corps JSON, en valeur, en clé ou imbriqué', async () => {
+      const post = (body) =>
+        fetch(`${base}/echo/a`, { method: 'POST', headers: { Authorization: 'Bearer tok-read', 'Content-Type': 'application/json' }, body });
+      await expectNul(await post(JSON.stringify({ q: 'a\u0000b' })));
+      await expectNul(await post(JSON.stringify({ 'k\u0000': 1 })));
+      await expectNul(await post(JSON.stringify({ list: [{ deep: ['\u0000'] }] })));
+      expect((await post(JSON.stringify({ q: 'a\\u0000b' }))).status).toBe(201); // antislash littéral : permis
+      noStack();
+    });
+
+    it('traduit les erreurs PostgreSQL 22021 et 22P05 en 400, sans pile', async () => {
+      await expectNul(await get('/pg/22021'));
+      await expectNul(await get('/pg/22P05'));
+      noStack();
+      expect((await get('/pg/23505')).status).toBe(500);
+    });
+  });
+
+  it('fixe délais et plafond de connexions', () => {
+    expect(server.requestTimeout).toBe(30_000);
+    expect(server.headersTimeout).toBe(15_000);
+    expect(server.keepAliveTimeout).toBe(5_000);
+    expect(server.maxConnections).toBe(256);
+  });
+});
+
+describe('containsNul', () => {
+  it('cherche dans chaînes, tableaux, clés et objets imbriqués', () => {
+    expect(containsNul('a\u0000')).toBe(true);
+    expect(containsNul({ a: [1, { b: 'x\u0000' }] })).toBe(true);
+    expect(containsNul({ ['\u0000']: 1 })).toBe(true);
+    expect(containsNul({ a: [1, null, true, 'ok'] })).toBe(false);
+    expect(containsNul(null)).toBe(false);
+  });
+});
+
+describe('clientAddress', () => {
+  const req = (xff) => ({ headers: xff ? { 'x-forwarded-for': xff } : {}, socket: { remoteAddress: '10.0.0.9' } });
+
+  it('ignore X-Forwarded-For sans proxy de confiance', () => {
+    expect(clientAddress(req('1.2.3.4'))).toBe('10.0.0.9');
+  });
+
+  it("prend la dernière entrée, ajoutée par le proxy, s'il est de confiance", () => {
+    expect(clientAddress(req('6.6.6.6, 1.2.3.4'), true)).toBe('1.2.3.4');
+    expect(clientAddress(req(''), true)).toBe('10.0.0.9');
+    expect(clientAddress({ headers: {}, socket: {} })).toBe('-');
+  });
+});
+
+describe('createRateLimiter', () => {
+  it('fenêtre glissante : refuse au-delà de la limite, puis libère', () => {
+    let t = 0;
+    const rl = createRateLimiter({ limit: 2, windowMs: 60_000, now: () => t });
+    expect(rl.take('a').ok).toBe(true);
+    t = 30_000;
+    expect(rl.take('a').ok).toBe(true);
+    expect(rl.take('a')).toEqual({ ok: false, retryAfter: 30 });
+    expect(rl.take('b').ok).toBe(true); // clés indépendantes
+    t = 60_000; // le premier appel sort de la fenêtre
+    expect(rl.peek('a').ok).toBe(true);
+    expect(rl.take('a').ok).toBe(true);
+    expect(rl.take('a')).toEqual({ ok: false, retryAfter: 30 });
+  });
+
+  it('oublie les clés inactives', () => {
+    let t = 0;
+    const rl = createRateLimiter({ limit: 5, windowMs: 1000, now: () => t });
+    for (const k of ['a', 'b', 'c']) rl.take(k);
+    expect(rl.size()).toBe(3);
+    t = 5000;
+    rl.take('d');
+    expect(rl.size()).toBe(1);
+  });
+
+  it('limite 0 : rien n’est limité', () => {
+    const rl = createRateLimiter({ limit: 0 });
+    for (let i = 0; i < 10; i += 1) expect(rl.take('a').ok).toBe(true);
+    expect(rl.peek('a').ok).toBe(true);
+  });
+});
+
+describe('serveur — limitation de débit', () => {
+  const clients = { 'tok-a': { id: 1, name: 'a', scope: 'read' }, 'tok-b': { id: 2, name: 'b', scope: 'read' } };
+  const routesRl = [
+    { path: '/open', scope: null, handler: async () => ({ body: { ok: true } }) },
+    { path: '/me', scope: 'read', handler: async ({ client }) => ({ body: { who: client.name } }) },
+  ].map((r) => compileRoute({ method: 'GET', ...r }));
+  let server;
+  let base;
+  let authCalls = 0;
+
+  beforeAll(async () => {
+    server = createApiServer({
+      routes: routesRl,
+      authenticate: async (token) => ((authCalls += 1), clients[token] ?? null),
+      rateLimiter: createRateLimiter({ limit: 3, windowMs: 60_000 }),
+      maxConnections: 7,
+      corsOrigins: ['https://datapool.test'],
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    base = `http://127.0.0.1:${server.address().port}`;
+  });
+
+  afterAll(() => new Promise((resolve) => server.close(resolve)));
+
+  const get = (path, token) =>
+    fetch(`${base}${path}`, { headers: { Origin: 'https://datapool.test', ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
+
+  it('prend maxConnections injecté', () => {
+    expect(server.maxConnections).toBe(7);
+  });
+
+  it('limite par jeton : 429 rate_limited avec Retry-After, les autres jetons passent', async () => {
+    for (let i = 0; i < 3; i += 1) expect((await get('/me', 'tok-a')).status).toBe(200);
+    const res = await get('/me', 'tok-a');
+    expect(res.status).toBe(429);
+    expect(Number(res.headers.get('retry-after'))).toBeGreaterThanOrEqual(1);
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://datapool.test');
+    expect((await res.json()).error.code).toBe('rate_limited');
+    expect((await get('/me', 'tok-b')).status).toBe(200);
+  });
+
+  it('limite les routes publiques par IP', async () => {
+    for (let i = 0; i < 3; i += 1) expect((await get('/open')).status).toBe(200);
+    const res = await get('/open');
+    expect(res.status).toBe(429);
+    expect((await get('/nope')).status).toBe(429); // chemin inconnu : même compteur d'IP
+    expect((await get('/me', 'tok-b')).status).toBe(200); // un jeton valide a son propre compteur
+  });
+
+  it("compte les échecs d'authentification par IP, puis n'interroge plus la base", async () => {
+    for (let i = 0; i < 3; i += 1) expect((await get('/me', 'faux')).status).toBe(401);
+    const before = authCalls;
+    expect((await get('/me', 'faux')).status).toBe(429);
+    expect(authCalls).toBe(before);
   });
 });

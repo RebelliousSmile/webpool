@@ -25,6 +25,23 @@ export function defaultDatabaseUrl(env = process.env) {
   return `postgres://webpool:webpool@localhost:${port}/webpool`;
 }
 
+// Environnements où le conteneur local sert de base par défaut.
+export const DEV_NODE_ENVS = ['', 'development', 'test'];
+
+// DATABASE_URL, ou le conteneur local en développement et en test (NODE_ENV
+// absent, development ou test). Ailleurs, son absence arrête net : un serveur de
+// production ne se rabat jamais sur des identifiants publics.
+export function resolveDatabaseUrl(env = process.env) {
+  if (env.DATABASE_URL) return env.DATABASE_URL;
+  const nodeEnv = env.NODE_ENV ?? '';
+  if (DEV_NODE_ENVS.includes(nodeEnv)) return defaultDatabaseUrl(env);
+  throw new Error(
+    `DATABASE_URL absente (NODE_ENV=${nodeEnv}) : la définir dans l'environnement ou dans .env, ` +
+      'par exemple DATABASE_URL=postgres://<utilisateur>:<mot de passe>@<hôte>:5432/<base>. ' +
+      'Le conteneur local (webpool:webpool) ne sert de défaut que si NODE_ENV est absent, development ou test.',
+  );
+}
+
 // Entier lu dans l'environnement, borné par `min` ; une valeur invalide arrête net.
 export function intEnv(name, fallback, min = 0, env = process.env) {
   const raw = env[name];

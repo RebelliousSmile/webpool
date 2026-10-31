@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { defaultDatabaseUrl, intEnv, loadDotEnv, numberEnv, ratioEnv, rootDir } from './env.js';
+import { intEnv, loadDotEnv, numberEnv, ratioEnv, resolveDatabaseUrl, rootDir } from './env.js';
 
 loadDotEnv();
 
@@ -14,10 +14,17 @@ function readRevision() {
 
 const { version } = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
 
+let databaseUrl;
+
 // Gelée : les réglages se passent en paramètre (tests compris), jamais par mutation.
 export const config = Object.freeze({
   rootDir,
-  databaseUrl: process.env.DATABASE_URL ?? defaultDatabaseUrl(),
+  // Lue à la première connexion : hors développement et tests, l'absence de
+  // DATABASE_URL arrête net, sans toucher aux commandes qui n'ouvrent pas la base.
+  get databaseUrl() {
+    databaseUrl ??= resolveDatabaseUrl();
+    return databaseUrl;
+  },
   braveApiKey: process.env.BRAVE_API_KEY ?? '',
   openrouterApiKey: process.env.OPENROUTER_API_KEY ?? '',
   openrouterEngine: process.env.OPENROUTER_ENGINE || 'perplexity',
@@ -60,6 +67,12 @@ export const config = Object.freeze({
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean),
+  // connexions simultanées au plus ; requêtes par minute et par jeton (par IP
+  // sans jeton), 0 pour ne pas limiter
+  apiMaxConnections: intEnv('WEBPOOL_API_MAX_CONNECTIONS', 256, 1),
+  apiRateLimit: intEnv('WEBPOOL_API_RATE_LIMIT', 300, 0),
+  // derrière le proxy de l'hébergeur : IP du client lue dans X-Forwarded-For
+  apiTrustProxy: ['1', 'true'].includes(process.env.WEBPOOL_API_TRUST_PROXY ?? ''),
   // Recherches payantes (webpool requests) : prix d'un appel en giri entiers,
   // coût du provider × cours USD→EUR × majoration × giri par euro, arrondi au-dessus.
   giriPerEur: intEnv('WEBPOOL_GIRI_PER_EUR', 1000, 1),
