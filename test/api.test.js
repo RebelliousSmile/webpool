@@ -192,6 +192,10 @@ describe('serveur', () => {
     expect((await post('{"q":', 'application/json')).status).toBe(400);
     expect((await post('q=1', 'application/x-www-form-urlencoded')).status).toBe(415);
     expect((await post(JSON.stringify({ q: 'x'.repeat(9000) }))).status).toBe(413);
+    // sans corps ni Content-Type : accepté, body undefined (acceptation d'une invitation)
+    const empty = await fetch(`${base}/echo/a`, { method: 'POST', headers: { Authorization: 'Bearer tok-read' } });
+    expect(empty.status).toBe(201);
+    expect(await empty.json()).toEqual({});
     // l'authentification passe avant la lecture du corps
     expect((await post('{}', 'application/json', 'nope')).status).toBe(401);
     const del = await fetch(`${base}/item/3`, { method: 'DELETE', headers: { Authorization: 'Bearer tok-read' } });
@@ -214,7 +218,7 @@ describe('serveur', () => {
 
     const preflight = await fetch(`${base}/admin`, { method: 'OPTIONS', headers: { Origin: 'https://datapool.test' } });
     expect(preflight.status).toBe(204);
-    expect(preflight.headers.get('access-control-allow-headers')).toBe('Authorization, Content-Type');
+    expect(preflight.headers.get('access-control-allow-headers')).toBe('Authorization, Content-Type, Idempotency-Key');
     expect(preflight.headers.get('access-control-allow-methods')).toBe('GET');
     expect(preflight.headers.get('access-control-allow-origin')).toBe('https://datapool.test');
   });

@@ -76,6 +76,8 @@ export const config = Object.freeze({
   // crédit minimal en centimes : sous ce montant, les frais fixes de paiement
   // (≈ 0,25 € par transaction) dépassent la marge
   minCreditCents: intEnv('WEBPOOL_MIN_CREDIT_CENTS', 200, 0),
+  // plafond d'un nouveau membre de communauté sans plafond explicite (giri / 30 jours)
+  memberDefaultLimit: process.env.WEBPOOL_MEMBER_DEFAULT_LIMIT === 'none' ? null : intEnv('WEBPOOL_MEMBER_DEFAULT_LIMIT', 1000, 0),
   // page de don ou d'achat de giri affichée par l'interface
   fundingUrl: process.env.WEBPOOL_FUNDING_URL || null,
   userAgent: `webpool/${version} (+https://github.com/RebelliousSmile/webpool)`,

@@ -30,8 +30,12 @@ function send(res, status, body, headers = {}) {
 export const MAX_BODY_BYTES = 8192;
 const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH']);
 
+// Un POST sans corps (ni Content-Type, ni octet) est accepté : body undefined.
 async function readJson(req) {
-  if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) {
+  const type = req.headers['content-type'];
+  const empty = req.headers['content-length'] === '0' || (req.headers['content-length'] === undefined && !req.headers['transfer-encoding']);
+  if (type === undefined && empty) return undefined;
+  if (!/^application\/json\b/i.test(type ?? '')) {
     throw new ApiError(415, 'unsupported_media_type', 'Corps attendu en application/json');
   }
   const chunks = [];
@@ -81,7 +85,7 @@ export function createApiServer({ routes, authenticate, corsOrigins = [], log = 
           ...BASE_HEADERS,
           ...cors,
           'Access-Control-Allow-Methods': [...new Set(match.allowed)].join(', '),
-          'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+          'Access-Control-Allow-Headers': 'Authorization, Content-Type, Idempotency-Key',
           'Access-Control-Max-Age': '600',
         });
         return res.end();
@@ -108,7 +112,7 @@ export function createApiServer({ routes, authenticate, corsOrigins = [], log = 
       }
 
       const body = BODY_METHODS.has(req.method) ? await readJson(req) : undefined;
-      const result = await route.handler({ client, params, query: url.searchParams, body });
+      const result = await route.handler({ client, params, query: url.searchParams, body, headers: req.headers });
       if (result.raw !== undefined) {
         return send(res, 200, result.raw, {
           ...cors,
@@ -117,7 +121,7 @@ export function createApiServer({ routes, authenticate, corsOrigins = [], log = 
           ...(result.filename ? { 'Content-Disposition': `attachment; filename="${result.filename}"` } : {}),
         });
       }
-      return send(res, result.status ?? 200, result.body, cors);
+      return send(res, result.status ?? 200, result.body, { ...cors, ...result.headers });
     } catch (err) {
       if (err instanceof ApiError) return sendError(res, err, cors);
       log(`Erreur interne : ${err.stack ?? err.message}`);

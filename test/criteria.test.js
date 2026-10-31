@@ -34,18 +34,24 @@ describe('buildPoolQuery', () => {
     expect(values).toContain(10);
   });
 
-  it('include_requests : sujet OU recherches du pool ; seuils et domains_exclude toujours', () => {
+  it('include_requests : sélection normale, puis URLs des recherches de la communauté ; seuils toujours', () => {
     const def = { theme: 'ia-generative', min_quality: 0.4, domains_exclude: ['pinterest.com'], include_requests: true };
     const { text, values } = buildPoolQuery(def, { poolId: 7 });
-    expect(text).toMatch(/OR EXISTS \(SELECT 1 FROM url_source us JOIN search_request sr/);
-    expect(text).toMatch(/NOT \(ui\.domain = ANY/);
-    // le seuil est hors de la disjonction : il s'applique aux URLs des recherches
-    expect(text).toMatch(/ui\.quality_score >= \$\d+\n\s+AND \(\(/);
+    expect(text).toMatch(/^WITH base AS/);
+    expect(text).toMatch(/extra AS[\s\S]*ui\.id IN \(SELECT us\.url_item_id FROM url_source us/);
+    expect(text).toMatch(/JOIN community_pool cp ON cp\.community_id = w\.community_id/);
+    expect(text).toContain('ui.id NOT IN (SELECT id FROM base)');
+    expect(text).toMatch(/ORDER BY part, rn$/);
+    expect(text).not.toContain('OR EXISTS');
+    // seuil et exclusion dans les deux parties ; le thème seulement dans la base
+    expect(text.match(/ui\.quality_score >= /g)).toHaveLength(2);
+    expect(text.match(/NOT \(ui\.domain = ANY/g)).toHaveLength(2);
+    expect(text.match(/ut\.is_primary/g)).toHaveLength(1);
     expect(values).toContain(7);
     // chaque $n référencé a sa valeur
     const max = Math.max(...[...text.matchAll(/\$(\d+)/g)].map((m) => Number(m[1])));
     expect(max).toBe(values.length);
-    // sans pool connu (validation à la création) ou sans autre critère : aucun ajout
+    // sans pool connu (validation à la création) ou sans critère de sujet : requête simple
     expect(buildPoolQuery(def).text).not.toContain('search_request');
     const bare = buildPoolQuery({ include_requests: true }, { poolId: 7 });
     expect(bare.text).not.toContain('search_request');

@@ -50,7 +50,15 @@ export async function ingest({ provider = 'file', searchQuery, sentQuery, exclud
     ...(requestId !== null ? { requestId } : {}),
   };
   return withRun('ingest', detail, async (runId) => {
-    const out = await impl.search({ query: sentQuery ?? searchQuery, excludeDomains, input, limit, page });
+    let out;
+    try {
+      out = await impl.search({ query: sentQuery ?? searchQuery, excludeDomains, input, limit, page });
+    } catch (err) {
+      // Échec du provider lui-même (rien n'a été écrit) : les recherches payées
+      // le distinguent d'un échec d'écriture après un appel facturé.
+      if (err && typeof err === 'object') err.providerFailed = true;
+      throw err;
+    }
     const results = Array.isArray(out) ? out : out.results;
     const costUsd = Array.isArray(out) ? null : (out.costUsd ?? null);
     const urls = results.map((r) => r.url);

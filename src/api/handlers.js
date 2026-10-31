@@ -4,13 +4,15 @@ import { config } from '../config.js';
 import { query } from '../db.js';
 import { MEDIA_FILE_RE, mediaUrl } from '../media/files.js';
 import { mediaOf, sourceOf } from '../media/kinds.js';
+import { poolGrantedSql } from '../access.js';
 import { stats } from '../stats.js';
 import { USAGE_VALUES } from '../domains/index.js';
 import { QUERY_STATUSES, listQueries } from '../explore/index.js';
 import { formatPool, FORMATS } from '../pools/export.js';
 import { loadPoolForExport } from '../pools/index.js';
 import {
-  BillingError, currentPrices, listMembers, ownerRemoveMember, ownerSetMember, walletEntries, walletsFor,
+  BillingError, answerInvitation, currentPrices, invitationsFor, leaveCommunity, listMembers, ownerRemoveMember,
+  ownerSetMember, walletEntries, walletsFor,
 } from '../billing/index.js';
 import { REQUEST_STATUSES, cancelRequest, createRequest, listRequests } from '../requests/index.js';
 import {
@@ -87,10 +89,7 @@ export async function me({ client }) {
 // --- Pools : visibles par l'admin ; pour un client `read`, les pools publics,
 // ceux qui lui sont accordés et ceux de ses communautés.
 
-const GRANTED_SQL = (clientParam) => `(p.public
-         OR EXISTS (SELECT 1 FROM api_client_pool cp WHERE cp.pool_id = p.id AND cp.api_client_id = ${clientParam})
-         OR EXISTS (SELECT 1 FROM community_pool cp JOIN community_member cm ON cm.community_id = cp.community_id
-                     WHERE cp.pool_id = p.id AND cm.api_client_id = ${clientParam}))`;
+const GRANTED_SQL = (clientParam) => poolGrantedSql('p', clientParam);
 
 async function visiblePool(client, slug) {
   const { rows } = await query(
@@ -107,11 +106,13 @@ async function visiblePool(client, slug) {
 
 export async function listPools({ client }) {
   const { rows } = await query(
-    `SELECT p.slug, p.label, p.public, p.refreshed_at, count(pi.url_item_id)::int AS items
+    // Filtrer d'abord, compter ensuite : seuls les pools visibles sont comptés,
+    // par l'index (pool_id, rank).
+    `SELECT p.slug, p.label, p.public, p.refreshed_at,
+            (SELECT count(*)::int FROM pool_item pi WHERE pi.pool_id = p.id) AS items
        FROM pool p
-       LEFT JOIN pool_item pi ON pi.pool_id = p.id
       WHERE $1 OR ${GRANTED_SQL('$2')}
-      GROUP BY p.id ORDER BY p.slug`,
+      ORDER BY p.slug`,
     [isAdmin(client), client.id],
   );
   return { body: { items: rows.map((r) => ({ ...r, refreshed_at: iso(r.refreshed_at) })) } };
@@ -495,7 +496,7 @@ async function billingCall(fn) {
 }
 
 export async function billing({ client }) {
-  const wallets = await walletsFor(client.id);
+  const [wallets, invitations] = await Promise.all([walletsFor(client.id), invitationsFor(client.id)]);
   return {
     body: {
       giri_per_eur: config.giriPerEur,
@@ -504,6 +505,7 @@ export async function billing({ client }) {
       prices: currentPrices().map(({ provider, unit_price, max_pages }) => ({ provider, unit_price, max_pages })),
       personal: wallets.personal,
       communities: wallets.communities,
+      invitations: invitations.map((i) => ({ ...i, invited_at: iso(i.invited_at) })),
     },
   };
 }
@@ -512,7 +514,7 @@ export async function billing({ client }) {
 async function membership(client, slug, { owner = false } = {}) {
   const { rows } = await query(
     `SELECT c.id, cm.role, w.id AS wallet_id FROM community c
-       JOIN community_member cm ON cm.community_id = c.id AND cm.api_client_id = $2
+       JOIN community_member cm ON cm.community_id = c.id AND cm.api_client_id = $2 AND cm.accepted_at IS NOT NULL
        LEFT JOIN wallet w ON w.community_id = c.id
       WHERE c.slug = $1`,
     [slug, client.id],
@@ -549,7 +551,7 @@ export async function listClientRequests({ client, query: qs }) {
   return { body: paged(items, total, page) };
 }
 
-export async function postRequest({ client, body }) {
+export async function postRequest({ client, body, headers = {} }) {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) throw badRequest('Objet JSON attendu');
   const known = new Set(['query', 'provider', 'pages', 'pool', 'community']);
   const unknown = Object.keys(body).filter((k) => !known.has(k));
@@ -566,21 +568,26 @@ export async function postRequest({ client, body }) {
       pages: body.pages,
       pool: body.pool || undefined,
       community: body.community || undefined,
+      idempotencyKey: headers['idempotency-key'] ?? null,
     }),
   );
-  return { status: 201, body: res };
+  // Même clé déjà servie : 200 et la recherche existante, sans nouveau débit.
+  const { replayed, ...rest } = res;
+  return replayed
+    ? { status: 200, body: rest, headers: { 'Idempotent-Replayed': 'true' } }
+    : { status: 201, body: rest };
 }
 
 export async function deleteRequest({ client, params }) {
   const id = idParam(params.id);
-  return { body: await billingCall(() => cancelRequest({ id, clientId: client.id })) };
+  return { body: await billingCall(() => cancelRequest({ id, clientId: client.id, isAdmin: isAdmin(client) })) };
 }
 
 // Toutes les recherches, pour l'admin.
 export async function listAllRequests({ query: qs }) {
   const page = pageParams(qs);
   const status = enumParam(qs, 'status', REQUEST_STATUSES);
-  const { items, total } = await listRequests({ status, ...page });
+  const { items, total } = await listRequests({ status, ...page, admin: true });
   return { body: paged(items, total, page) };
 }
 
@@ -611,4 +618,18 @@ export async function putCommunityMember({ client, params, body }) {
 
 export async function deleteCommunityMember({ client, params }) {
   return { body: await billingCall(() => ownerRemoveMember({ clientId: client.id, community: params.slug, name: params.name })) };
+}
+
+// --- Invitations et départ, côté membre.
+
+export async function acceptInvitation({ client, params }) {
+  return { body: await billingCall(() => answerInvitation({ clientId: client.id, community: params.slug, accept: true })) };
+}
+
+export async function declineInvitation({ client, params }) {
+  return { body: await billingCall(() => answerInvitation({ clientId: client.id, community: params.slug, accept: false })) };
+}
+
+export async function leaveCommunityHandler({ client, params }) {
+  return { body: await billingCall(() => leaveCommunity({ clientId: client.id, name: client.name, community: params.slug })) };
 }

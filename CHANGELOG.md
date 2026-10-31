@@ -7,6 +7,8 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions [Sem
 
 ### Added
 
+- Audit du 2026-10-31, recherches payantes : clé d'idempotence d'achat (`Idempotency-Key`, 200 et `Idempotent-Replayed` sur une clé rejouée) ; invitations aux communautés (`POST|DELETE /communities/{slug}/invitation`, `DELETE /communities/{slug}/membership`, `invitations` dans `/billing`, champ `accepted`) ; plafond par défaut d'un nouveau membre (`WEBPOOL_MEMBER_DEFAULT_LIMIT`) ; reprise du post-traitement des recherches (`processed_at`), étapes isolées, code de sortie 1 ; migration `011_requests_hardening` (idempotence, post-traitement, catégorie d'erreur, invitations, index) ; tests CLI des commandes de facturation, tests concurrents, rôle PostgreSQL minimal testé.
+
 - Recherches payantes : les pools restent gratuits, une recherche se paie d'avance en giri (1 € = 1 000 giri), sur le portefeuille d'un client (don) ou d'une communauté (achat). Prix d'un appel = coût du provider majoré (`WEBPOOL_PRICE_MARKUP`), pages non lancées et appels en échec remboursés. Communautés (`webpool community`), membres avec plafond sur 30 jours, pools visibles par les membres ; grand livre (`webpool wallet credit|adjust|show`, référence de paiement unique) ; `webpool pricing`, `webpool requests run|list|cancel`, `webpool billing report` ; critère de pool `include_requests` ; coût réel des appels OpenRouter (`usage.cost`) ; migration `009_billing`.
 - API : `GET /billing`, `GET /billing/entries`, `GET|POST /requests`, `DELETE /requests/{id}`, `GET /admin/requests` ; corps JSON borné à 8 Ko, prévol CORS par chemin (`POST`, `DELETE`, en-tête `Content-Type`).
 - Pools publics (`webpool pool publish|unpublish`, champ `public`) : visibles et exportables par tout client sans accord.
@@ -24,8 +26,26 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions [Sem
 - Exploration par tuyaux : les requêtes étiquetées `flot:<slug>` forment un tuyau, `explore` ne lance que le tuyau courant et le quitte quand sa pression (domaines nouveaux bien notés par appel jugé) tombe sous `WEBPOOL_PIPE_DROP_RATIO` × sa référence ou qu'il n'a plus de requête active ; `webpool pipe list` ; migrations `006_domain_run` et `007_explore_pipe`.
 - `query import` ajoute aux requêtes déjà connues les étiquettes qui leur manquent ; exemples étiquetés `flot:<nom>`.
 
+### Changed
+
+- `src/pipeline/` partagé par `cycle` et `requests run` ; règle de visibilité des pools unique (`src/access.js`) ; `include_requests` en sélection en deux parties (semi-jointure indexée) ; `listPools` compte après filtrage.
+- Dépendances de développement : vitest 5.0.5, vite 8.3.5, `minimatch` ≥ 11.0.1 (override).
+
 ### Fixed
 
+- Recherches payantes (audit du 2026-10-31) :
+  - un échec de `normalize`, `classify` ou du refresh laissait les recherches payées hors de leur pool jusqu'au cycle suivant ;
+  - `normalize` et `classify` concurrents traitaient les mêmes URLs et pouvaient faire repasser une URL classée en normalisée (réservation des lignes, verrou dans les commandes manuelles) ;
+  - `in_pool` se figeait (calculé à la lecture) ;
+  - une URL payée pouvait perdre sa place face à `limit` (ajoutée après la sélection) ;
+  - le rôle PostgreSQL minimal documenté cassait l'achat (verrous consultatifs) ;
+  - les erreurs brutes des providers étaient visibles des clients ;
+  - un admin ne pouvait pas annuler par l'API ;
+  - deux crédits concurrents de même référence renvoyaient une erreur PostgreSQL brute ;
+  - `GET /billing` écrivait en base et faisait une requête par communauté ;
+  - les recherches interrompues attendaient une heure ;
+  - le coût d'un appel facturé puis non enregistré était oublié ;
+  - un `POST` sans corps était refusé.
 - `/admin/runs?kind=media` refusé alors que `webpool media` trace des runs `media`.
 - `openapi.json` livré au déploiement : `/api/v1/openapi.json` aurait répondu 500 en production.
 - Test des critères `recent` : la regex contenait un caractère de contrôle au lieu de `\b` et ne vérifiait rien.

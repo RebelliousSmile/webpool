@@ -116,7 +116,7 @@ async function persistBatch(classified, ids, runId) {
               quality_score = s.quality, classified_at = now(), classify_run_id = $5
          FROM unnest($1::bigint[], $2::numeric[], $3::numeric[], $4::numeric[])
               AS s(id, relevance, confidence, quality)
-        WHERE ui.id = s.id`,
+        WHERE ui.id = s.id AND ui.status IN ('normalized', 'classified')`,
       [
         itemIds,
         classified.map(({ result }) => result.scores.relevance),
@@ -129,7 +129,8 @@ async function persistBatch(classified, ids, runId) {
 }
 
 // US-05 : classe les url_item en statut 'normalized' (ou reclasse avec --all).
-export async function classifyPending({ limit = 100, reclassify = false, taxonomy = loadTaxonomy() } = {}) {
+// `onlyIds` limite le lot à ces URLs (requests run : celles de ses recherches).
+export async function classifyPending({ limit = 100, reclassify = false, taxonomy = loadTaxonomy(), onlyIds = null } = {}) {
   return withRun('classify', { limit, reclassify }, async (runId) => {
     const ids = await syncTaxonomy(taxonomy);
     const statuses = reclassify ? ['normalized', 'classified'] : ['normalized'];
@@ -140,11 +141,11 @@ export async function classifyPending({ limit = 100, reclassify = false, taxonom
                   coalesce(array_agg(DISTINCT us.query) FILTER (WHERE us.query IS NOT NULL), '{}') AS queries
              FROM url_item ui
              LEFT JOIN url_source us ON us.url_item_id = ui.id
-            WHERE ui.status = ANY($1) AND ui.id > $3
+            WHERE ui.status = ANY($1) AND ui.id > $3 AND ($4::bigint[] IS NULL OR ui.id = ANY($4))
             GROUP BY ui.id
             ORDER BY ui.id
             LIMIT $2`,
-          [statuses, limit, afterId],
+          [statuses, limit, afterId, onlyIds],
         )
       ).rows;
 

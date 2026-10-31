@@ -82,8 +82,8 @@ function validateDefinition(definition) {
 
 // `poolId` sert au critère include_requests : une URL trouvée par une recherche
 // payée par une communauté propriétaire du pool, et qui le vise, y entre dès
-// qu'elle est classée, sans remplir les
-// critères de sujet (theme, subthemes, facets, domains_include) ; les seuils
+// qu'elle est classée, sans remplir les critères de sujet (theme, subthemes,
+// facets, domains_include), après la sélection normale ; les seuils
 // min_relevance et min_quality et domains_exclude s'appliquent toujours.
 export function buildPoolQuery(definition, { poolId = null } = {}) {
   validateDefinition(definition);
@@ -128,32 +128,51 @@ export function buildPoolQuery(definition, { poolId = null } = {}) {
   if (definition.min_quality != null) {
     thresholds.push(`ui.quality_score >= ${add(definition.min_quality)}`);
   }
-  const conditions = ["ui.status = 'classified'", ...thresholds];
-  // Sans autre critère, le pool prend déjà toutes les URLs classées.
-  if (definition.include_requests && poolId !== null && where.length) {
-    // Seules comptent les recherches payées par une communauté propriétaire du
-    // pool : un client qui paie sur son portefeuille personnel n'y injecte rien.
-    const requested =
-      `EXISTS (SELECT 1 FROM url_source us JOIN search_request sr ON sr.id = us.search_request_id\n` +
-      `               JOIN wallet w ON w.id = sr.wallet_id\n` +
-      `               JOIN community_pool cp ON cp.community_id = w.community_id AND cp.pool_id = sr.pool_id\n` +
-      `               WHERE us.url_item_id = ui.id AND sr.pool_id = ${add(poolId)})`;
-    conditions.push(`((${where.join('\n   AND ')})\n   OR ${requested})`);
-  } else {
-    conditions.push(...where);
-  }
+  // Toujours appliqués : classée, seuils de qualité, domaines exclus.
+  const always = ["ui.status = 'classified'", ...thresholds];
   if (definition.domains_exclude?.length) {
-    conditions.push(`NOT (ui.domain = ANY(${add(definition.domains_exclude)}))`);
+    always.push(`NOT (ui.domain = ANY(${add(definition.domains_exclude)}))`);
   }
-
   const limit = Math.max(1, Math.min(1000, definition.limit ?? 100));
-  const text =
-    `SELECT ui.id, ui.canonical_url, ui.domain, ${SCORE_EXPR[order]} AS pool_score\n` +
+  const limitParam = add(limit);
+  const select = (conds, rank) =>
+    `SELECT ui.id, ui.canonical_url, ui.domain, ${SCORE_EXPR[order]} AS pool_score,\n` +
+    `       row_number() OVER (ORDER BY ${ORDERS[order]}, ui.id) AS ${rank}\n` +
     `  FROM url_item ui\n` +
     (JOINS[order] ?? '') +
-    ` WHERE ${conditions.join('\n   AND ')}\n` +
+    ` WHERE ${conds.join('\n   AND ')}\n` +
     ` ORDER BY ${ORDERS[order]}, ui.id\n` +
-    ` LIMIT ${add(limit)}`;
+    ` LIMIT ${limitParam}`;
 
+  // Sans critère de sujet, le pool prend déjà toutes les URLs classées.
+  if (!(definition.include_requests && poolId !== null && where.length)) {
+    const text =
+      `SELECT ui.id, ui.canonical_url, ui.domain, ${SCORE_EXPR[order]} AS pool_score\n` +
+      `  FROM url_item ui\n` +
+      (JOINS[order] ?? '') +
+      ` WHERE ${[...always, ...where].join('\n   AND ')}\n` +
+      ` ORDER BY ${ORDERS[order]}, ui.id\n` +
+      ` LIMIT ${limitParam}`;
+    return { text, values };
+  }
+
+  // include_requests : la sélection normale (au plus `limit`), puis, après
+  // elle, les URLs des recherches payées par une communauté propriétaire du
+  // pool qui n'y sont pas déjà (au plus `limit` de plus). Une recherche payée
+  // ne dispute donc pas sa place à la sélection, et un client qui paie sur son
+  // portefeuille personnel n'y injecte rien. IN (sous-requête) plutôt qu'un
+  // OR EXISTS : PostgreSQL en fait une semi-jointure indexée.
+  const requested =
+    `ui.id IN (SELECT us.url_item_id FROM url_source us\n` +
+    `                 JOIN search_request sr ON sr.id = us.search_request_id\n` +
+    `                 JOIN wallet w ON w.id = sr.wallet_id\n` +
+    `                 JOIN community_pool cp ON cp.community_id = w.community_id AND cp.pool_id = sr.pool_id\n` +
+    `                WHERE sr.pool_id = ${add(poolId)})`;
+  const text =
+    `WITH base AS (\n${select([...always, ...where], 'rn')}\n),\n` +
+    `extra AS (\n${select([...always, requested, 'ui.id NOT IN (SELECT id FROM base)'], 'rn')}\n)\n` +
+    `SELECT id, canonical_url, domain, pool_score FROM (\n` +
+    `  SELECT *, 1 AS part FROM base UNION ALL SELECT *, 2 AS part FROM extra\n` +
+    `) t ORDER BY part, rn`;
   return { text, values };
 }

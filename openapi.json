@@ -1108,8 +1108,30 @@
                 }
               }
             }
+          },
+          "200": {
+            "description": "Clé d'idempotence déjà servie : recherche existante, rien de débité (en-tête Idempotent-Replayed: true)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestReceipt"
+                }
+              }
+            }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "1 à 100 caractères [A-Za-z0-9_-] ; même clé du même client : la recherche déjà achetée est rendue (200), sans nouveau débit",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,100}$"
+            }
+          }
+        ]
       }
     },
     "/requests/{id}": {
@@ -1270,7 +1292,7 @@
     },
     "/communities/{slug}/members/{name}": {
       "put": {
-        "summary": "Ajoute un membre ou change son rôle et son plafond (propriétaires seulement ; la communauté garde un propriétaire actif)",
+        "summary": "Invite un client, ou change le rôle ou le plafond d'un membre (propriétaires seulement ; upsert partiel ; un invité devient membre en acceptant)",
         "tags": [
           "recherches"
         ],
@@ -1366,6 +1388,157 @@
                     },
                     "name": {
                       "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/communities/{slug}/invitation": {
+      "post": {
+        "summary": "Accepte l'invitation de la communauté",
+        "tags": [
+          "recherches"
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "community"
+                  ],
+                  "properties": {
+                    "community": {
+                      "type": "string"
+                    },
+                    "accepted": {
+                      "type": "boolean"
+                    },
+                    "left": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Décline l'invitation de la communauté",
+        "tags": [
+          "recherches"
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "community"
+                  ],
+                  "properties": {
+                    "community": {
+                      "type": "string"
+                    },
+                    "accepted": {
+                      "type": "boolean"
+                    },
+                    "left": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/communities/{slug}/membership": {
+      "delete": {
+        "summary": "Quitte la communauté (le dernier propriétaire actif ne peut pas)",
+        "tags": [
+          "recherches"
+        ],
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "community"
+                  ],
+                  "properties": {
+                    "community": {
+                      "type": "string"
+                    },
+                    "accepted": {
+                      "type": "boolean"
+                    },
+                    "left": {
+                      "type": "boolean"
                     }
                   }
                 }
@@ -2500,7 +2673,8 @@
           "max_queued",
           "prices",
           "personal",
-          "communities"
+          "communities",
+          "invitations"
         ],
         "properties": {
           "giri_per_eur": {
@@ -2540,6 +2714,13 @@
             "items": {
               "$ref": "#/components/schemas/CommunityWallet"
             }
+          },
+          "invitations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Invitation"
+            },
+            "description": "invitations à des communautés, en attente d'acceptation"
           }
         }
       },
@@ -2701,13 +2882,14 @@
               "integer",
               "null"
             ],
-            "description": "URLs de la recherche présentes dans le pool visé après refresh"
+            "description": "URLs de la recherche présentes aujourd'hui dans le pool visé (calculé à la lecture)"
           },
           "error": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "cause d'un échec : message générique pour un client, message brut du provider pour l'admin"
           },
           "created_at": {
             "type": "string",
@@ -2800,7 +2982,8 @@
           "spent_30d",
           "revoked",
           "joined_at",
-          "contributed"
+          "contributed",
+          "accepted"
         ],
         "properties": {
           "name": {
@@ -2834,6 +3017,10 @@
           "contributed": {
             "type": "integer",
             "description": "giri versés par le membre au pot commun (apports à son nom)"
+          },
+          "accepted": {
+            "type": "boolean",
+            "description": "invitation acceptée ; un invité ne voit ni les pools ni le pot"
           }
         }
       },
@@ -2865,7 +3052,8 @@
           "community",
           "name",
           "role",
-          "monthly_limit"
+          "monthly_limit",
+          "accepted"
         ],
         "properties": {
           "community": {
@@ -2882,6 +3070,45 @@
               "integer",
               "null"
             ]
+          },
+          "accepted": {
+            "type": "boolean",
+            "description": "false : client invité, membre après acceptation"
+          }
+        }
+      },
+      "Invitation": {
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "role",
+          "monthly_limit",
+          "invited_at"
+        ],
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "member"
+            ]
+          },
+          "monthly_limit": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "invited_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       }

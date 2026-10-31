@@ -15,6 +15,7 @@ import { cycle } from '../src/cycle/index.js';
 import { cacheMedia } from '../src/media/index.js';
 import { addClient, listClients, revokeClient, setPoolAccess } from '../src/api/clients.js';
 import { config } from '../src/config.js';
+import { withPipelineLock } from '../src/lock.js';
 import {
   addCommunity, adjust, billingReport, credit, currentPrices, listCommunities, removeMember,
   setCommunityPool, setMember, walletEntries, walletOf,
@@ -107,6 +108,14 @@ const OPTIONS = {
   help: { type: 'boolean', short: 'h', default: false },
 };
 
+// normalize et classify à la main prennent le verrou du pipeline : jamais en
+// même temps que cycle ou requests run, qui traitent la même file.
+async function pipelineLocked(name, fn) {
+  const res = await withPipelineLock(fn);
+  if (res === null) throw new Error(`${name} : cycle ou requests run en cours, réessayer après`);
+  return res;
+}
+
 const giriEur = (giri) => `${eurosOf(giri, config.giriPerEur).toFixed(3).replace('.', ',')} €`;
 const walletOwner = (values) => ({ name: values.name, community: values.community });
 
@@ -145,14 +154,14 @@ async function main() {
       break;
     }
     case 'normalize': {
-      const res = await normalizePending({ limit, offline: values.offline });
+      const res = await pipelineLocked('normalize', () => normalizePending({ limit, offline: values.offline }));
       console.log(
         `Normalize run #${res.runId} : ${res.normalized} normalisées, ${res.duplicate} doublons, ${res.error} erreurs (sur ${res.total}).`,
       );
       break;
     }
     case 'classify': {
-      const res = await classifyPending({ limit, reclassify: values.all });
+      const res = await pipelineLocked('classify', () => classifyPending({ limit, reclassify: values.all }));
       console.log(
         `Classify run #${res.runId} : ${res.classified} classées, dont ${res.unthemed} sans thème.`,
       );
@@ -417,16 +426,21 @@ async function main() {
       if (subcommand === 'run') {
         const res = await runRequests({ limit: limit ?? 10, offline: values.offline });
         if (res === null) {
-          console.log('Un autre requests run est en cours : rien à faire.');
+          console.log('cycle ou requests run en cours : rien à faire ce tour-ci.');
           break;
         }
         if (res.recovered) console.log(`${res.recovered} recherche(s) interrompue(s) close(s).`);
         for (const r of res.requests) {
           console.log(`#${r.id} : ${r.calls} appel(s), ${r.newUrls} URLs nouvelles${r.refunded ? `, ${r.refunded} giri remboursés` : ''}${r.error ? ` ; erreur : ${r.error}` : ''}`);
         }
-        for (const p of res.pools) console.log(`pool ${p.slug} : ${p.error ? `erreur — ${p.error}` : `${p.count} URLs`}`);
         if (res.requests.length === 0) console.log('Aucune recherche en attente.');
-        if (res.requests.length > 0 && res.requests.every((r) => r.error)) process.exitCode = 1;
+        if (res.processed.length) {
+          console.log(`Post-traitement de ${res.processed.length} recherche(s) :`);
+          for (const step of res.steps) console.log(`  ${step.name.padEnd(9)} ${step.ok ? 'ok' : 'ÉCHEC'}  ${step.line}`);
+          if (!res.ok) console.log('  repris au prochain requests run.');
+        }
+        // Code 1 : toutes les recherches en échec, ou post-traitement à reprendre.
+        if ((res.requests.length > 0 && res.requests.every((r) => r.error)) || !res.ok) process.exitCode = 1;
       } else if (subcommand === 'list') {
         const status = values.status;
         if (status && !REQUEST_STATUSES.includes(status)) throw new Error(`--status invalide : ${status} (attendu : ${REQUEST_STATUSES.join(', ')})`);
