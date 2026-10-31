@@ -39,6 +39,11 @@ export const config = Object.freeze({
   pipeDropRatio: ratioEnv('WEBPOOL_PIPE_DROP_RATIO', 0.5),
   // intranet assumé : désactive la garde d'hôte de la normalisation
   allowPrivateHosts: ['1', 'true'].includes(process.env.WEBPOOL_ALLOW_PRIVATE_HOSTS ?? ''),
+  // Médias (webpool media) : cache hors du dossier remplacé au déploiement
+  // (~/www/webpool-data/media sur alwaysdata) ; par défaut var/media du dépôt.
+  mediaDir: process.env.WEBPOOL_MEDIA_DIR || path.join(rootDir, 'var', 'media'),
+  mediaMaxBytes: intEnv('WEBPOOL_MEDIA_MAX_BYTES', 5 * 1024 * 1024, 1),
+  mediaConcurrency: intEnv('WEBPOOL_MEDIA_CONCURRENCY', 4, 1),
   // API HTTP (webpool serve) : PORT et IP sont fournis par l'hébergeur (alwaysdata)
   apiPort: process.env.WEBPOOL_API_PORT ? intEnv('WEBPOOL_API_PORT', 3000, 1) : intEnv('PORT', 3000, 1),
   apiHost: process.env.WEBPOOL_API_HOST || process.env.IP || '127.0.0.1',

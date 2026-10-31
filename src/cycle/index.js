@@ -1,10 +1,11 @@
-// Cycle de la tâche planifiée : explore, puis normalize et classify par lots
-// jusqu'à vider la file, puis refresh de tous les pools. Une étape en échec
+// Cycle de la tâche planifiée : explore, puis normalize, classify et media par
+// lots jusqu'à vider la file, puis refresh de tous les pools. Une étape en échec
 // n'arrête pas les suivantes ; le cycle échoue si une étape échoue entièrement.
 import { query } from '../db.js';
 import { explore } from '../explore/index.js';
 import { normalizePending } from '../normalize/index.js';
 import { classifyPending } from '../classify/index.js';
+import { cacheMedia } from '../media/index.js';
 import { listPools, refreshPool } from '../pools/index.js';
 
 const message = (err) => String(err?.message ?? err);
@@ -72,6 +73,22 @@ export async function cycle({ budget, provider, offline = false, batch = 100, ex
         ok: true,
         line: `${t.classified} classées, dont ${t.unthemed} sans thème ; ${rows[0].n} domaines à qualifier`,
         result: { ...t, toQualify: rows[0].n },
+      };
+    }),
+  );
+
+  // Hors ligne, aucune image n'est téléchargée : l'étape est sautée.
+  steps.push(
+    await runStep('media', async () => {
+      if (offline) return { ok: true, line: 'sautée (hors ligne)', result: null };
+      const t = await drain(async (limit) => {
+        const res = await cacheMedia({ limit });
+        return { ...res, processed: res.total };
+      }, batch);
+      return {
+        ok: true,
+        line: `${t.thumbs} vignettes, ${t.favicons} favicons, ${t.failed} échecs (${t.batches} lots)`,
+        result: t,
       };
     }),
   );

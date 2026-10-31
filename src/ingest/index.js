@@ -75,6 +75,19 @@ export async function ingest({ provider = 'file', searchQuery, sentQuery, exclud
          SELECT item_id, $3, $4, serp_rank, $5 FROM unnest($1::bigint[], $2::int[]) AS t(item_id, serp_rank)`,
         [urls.map((u) => idByUrl.get(u)), results.map((r) => r.rank ?? null), provider, searchQuery, runId],
       );
+      // Vignettes fournies par le provider : repli de l'aperçu de la page,
+      // http(s) seulement, la première connue d'une URL fait foi.
+      const thumbs = results
+        .map((r) => [idByUrl.get(r.url), typeof r.thumbnail === 'string' && /^https?:\/\//i.test(r.thumbnail) ? r.thumbnail.slice(0, 2000) : null])
+        .filter(([id, thumb]) => id && thumb);
+      if (thumbs.length) {
+        await client.query(
+          `INSERT INTO url_media (url_item_id, kind, source_url)
+           SELECT DISTINCT ON (id) id, 'provider', thumb FROM unnest($1::bigint[], $2::text[]) AS t(id, thumb)
+           ON CONFLICT (url_item_id, kind) DO NOTHING`,
+          [thumbs.map(([id]) => id), thumbs.map(([, thumb]) => thumb)],
+        );
+      }
       // Un domaine n'est nouveau qu'une fois : la première requête le garde.
       newDomains = (await registerDomains(client, urls.map(offlineDomain), searchQuery, runId)).length;
     });

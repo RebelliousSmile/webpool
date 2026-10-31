@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 
 // Provider hors-ligne : lit un export JSON de résultats de recherche.
-// Formats acceptés : ["https://…", …] · [{url, rank?, title?}, …] · {results: [...]}
+// Formats acceptés : ["https://…", …] · [{url, rank?, title?, thumbnail?}, …] · {results: [...]}
 export function normalizeResults(data) {
   const list = Array.isArray(data) ? data : data?.results;
   if (!Array.isArray(list)) {
@@ -11,7 +11,8 @@ export function normalizeResults(data) {
     .map((entry, i) => {
       if (typeof entry === 'string') return { url: entry, rank: i + 1, title: null };
       if (entry && typeof entry.url === 'string') {
-        return { url: entry.url, rank: entry.rank ?? i + 1, title: entry.title ?? null };
+        const result = { url: entry.url, rank: entry.rank ?? i + 1, title: entry.title ?? null };
+        return typeof entry.thumbnail === 'string' ? { ...result, thumbnail: entry.thumbnail } : result;
       }
       return null;
     })

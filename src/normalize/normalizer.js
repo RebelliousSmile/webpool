@@ -66,3 +66,88 @@ export function extractCanonicalLink(html, baseUrl) {
   }
   return null;
 }
+
+// Attributs d'une balise (`<meta property="og:image" content="…">`), noms en minuscules.
+function attributes(tag) {
+  const attrs = {};
+  for (const m of tag.matchAll(/([a-zA-Z_:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/g)) {
+    attrs[m[1].toLowerCase()] = m[2] ?? m[3] ?? m[4] ?? '';
+  }
+  return attrs;
+}
+
+// Entités nommées courantes (français compris) ; les entités numériques sont toutes décodées.
+const ENTITIES = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', hellip: '…', mdash: '—', ndash: '–',
+  laquo: '«', raquo: '»', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', copy: '©', reg: '®',
+  eacute: 'é', egrave: 'è', ecirc: 'ê', euml: 'ë', agrave: 'à', acirc: 'â', ccedil: 'ç',
+  icirc: 'î', iuml: 'ï', ocirc: 'ô', ucirc: 'û', ugrave: 'ù', uuml: 'ü', oelig: 'œ', Eacute: 'É',
+};
+export function decodeEntities(text) {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (all, code) => {
+    if (code[0] !== '#') return ENTITIES[code] ?? ENTITIES[code.toLowerCase()] ?? all;
+    const n = code[1] === 'x' || code[1] === 'X' ? parseInt(code.slice(2), 16) : Number(code.slice(1));
+    return Number.isInteger(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : all;
+  });
+}
+
+const clean = (text, max) => {
+  const s = decodeEntities(String(text ?? '')).replace(/\s+/g, ' ').trim();
+  return s ? s.slice(0, max) : null;
+};
+
+// URL de ressource : résolue contre la page, http(s) seulement, longueur bornée.
+export function resourceUrl(href, baseUrl) {
+  if (!href) return null;
+  try {
+    const url = new URL(decodeEntities(href.trim()), baseUrl);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    const out = url.toString();
+    return out.length <= 2000 ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+// Ordre de préférence des icônes : apple-touch-icon (PNG, grand), icône PNG,
+// autre icône déclarée, puis /favicon.ico par convention.
+function iconRank(rel, type, href) {
+  if (/apple-touch-icon/.test(rel)) return 0;
+  if (/png/.test(type) || /\.png(\?|$)/i.test(href)) return 1;
+  if (/svg/.test(type) || /\.svg(\?|$)/i.test(href)) return 9; // refusé au téléchargement
+  return 2;
+}
+
+// Métadonnées utiles d'une page : aperçu (og:image, twitter:image), description,
+// type (og:type), nom du site, langue, icône. Fonction pure.
+export function extractMeta(html, baseUrl) {
+  const meta = {};
+  for (const tag of html.match(/<meta\b[^>]*>/gi) ?? []) {
+    const a = attributes(tag);
+    const key = (a.property ?? a.name ?? '').toLowerCase();
+    if (key && a.content !== undefined && !(key in meta)) meta[key] = a.content;
+  }
+  let icon = null;
+  let iconScore = Infinity;
+  for (const tag of html.match(/<link\b[^>]*>/gi) ?? []) {
+    const a = attributes(tag);
+    const rel = (a.rel ?? '').toLowerCase();
+    if (!/(^|\s)(icon|shortcut icon|apple-touch-icon(-precomposed)?)(\s|$)/.test(rel) && rel !== 'shortcut icon') continue;
+    const href = resourceUrl(a.href, baseUrl);
+    const score = href ? iconRank(rel, (a.type ?? '').toLowerCase(), href) : Infinity;
+    if (score < iconScore) {
+      icon = href;
+      iconScore = score;
+    }
+  }
+  const lang = /<html\b[^>]*\blang\s*=\s*["']?([a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})?)/i.exec(html)?.[1] ?? null;
+  return {
+    title: clean(meta['og:title'], 500),
+    description: clean(meta['og:description'] ?? meta.description ?? meta['twitter:description'], 500),
+    image: resourceUrl(meta['og:image:secure_url'] ?? meta['og:image'] ?? meta['twitter:image'] ?? meta['twitter:image:src'], baseUrl),
+    ogType: clean(meta['og:type'], 50),
+    siteName: clean(meta['og:site_name'], 200),
+    lang: lang ? lang.toLowerCase() : null,
+    icon: iconScore < 9 ? icon : resourceUrl('/favicon.ico', baseUrl),
+  };
+}

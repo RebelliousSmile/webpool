@@ -341,6 +341,40 @@ Limites :
 - Les requêtes s'écrivent à la main. Les générer à partir du corpus est prévu
   dans une phase ultérieure.
 
+## Médias des liens
+
+La normalisation en ligne lit le `<head>` de chaque page : description
+(`og:description`, sinon `description`), image d'aperçu (`og:image`,
+`twitter:image`), type (`og:type`), nom du site, langue et icône du site. Elle fixe
+aussi le **type de média** du lien (page, image, vidéo, PDF, données, code, modèle)
+d'après le Content-Type, `og:type` et l'URL. Les providers fournissent une
+vignette de repli (Flickr `url_w`, Europeana `edmPreview`, Brave `thumbnail`).
+
+```bash
+pnpm webpool media                 # vignettes et favicons en attente → cache
+pnpm webpool media --retry-failed  # retente les échecs
+```
+
+`webpool media` (aussi étape de `cycle`, sautée hors ligne) télécharge ces images
+avec les protections de la normalisation (hôtes publics seulement, délai par hôte,
+retries, taille bornée), refuse SVG et images de plus de 40 Mpx, réduit en WebP
+(vignette 480 px de large, favicon 64 px, métadonnées retirées) et range chaque
+fichier sous son empreinte dans `WEBPOOL_MEDIA_DIR`. Un `.ico` n'est accepté que
+s'il contient une image PNG. L'API sert ces fichiers sans jeton
+(`/api/v1/media/{empreinte}.webp`, cache immuable) : une balise `<img>` ne peut pas
+envoyer de jeton, et la route ne lit que le cache, elle ne télécharge jamais rien.
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `WEBPOOL_MEDIA_DIR` | `var/media` du dépôt | cache des vignettes et favicons |
+| `WEBPOOL_MEDIA_MAX_BYTES` | 5 Mo | taille maximale d'une image téléchargée |
+| `WEBPOOL_MEDIA_CONCURRENCY` | 4 | téléchargements simultanés |
+
+La famille de source (recherche, archives et musées, banques d'images,
+communautés, plateformes vidéo, presse et guides, autres) se calcule à la lecture
+depuis le domaine (`src/media/kinds.js`) : enrichir la liste ne demande aucune
+reprise du corpus.
+
 ## API HTTP (lecture seule)
 
 `webpool serve` expose le corpus et les pools en JSON, pour l'interface
@@ -371,9 +405,10 @@ pnpm webpool client revoke --name client-a
 | Route (`/api/v1`) | Accès | Contenu |
 |---|---|---|
 | `/health`, `/openapi.json` | public | état de la base, contrat |
+| `/media/{empreinte}.webp` | public | vignette ou favicon du cache (`Cache-Control: immutable`) |
 | `/me` | read | client authentifié |
 | `/pools`, `/pools/{slug}` | read | pools visibles ; volumes, domaines principaux, répartition de l'usage commercial |
-| `/pools/{slug}/items` | read | URLs rangées, paginées (`limit` ≤ 500, `offset`) |
+| `/pools/{slug}/items` | read | URLs rangées, paginées (`limit` ≤ 500, `offset`), avec description, type de média, famille de source, vignette et favicon |
 | `/admin/stats` | admin | volumes pour un tableau de bord |
 | `/admin/pools/{slug}/export?format=json\|csv\|md` | admin | export de `pool export` |
 | `/admin/urls`, `/admin/urls/{id}` | admin | corpus filtré (`status`, `theme`, `facet=slug:valeur`, `domain`, `q`, `order`) ; fiche : sources, thèmes, facettes, pools |
@@ -446,6 +481,12 @@ sont copiés une fois dans `~/www/webpool-data/<exemple>/` (`queries.json`,
 Ce répertoire est hors de `~/www/webpool`, donc la bascule ne le touche pas ; la
 base reste la seule source de vérité.
 
+**Cache de médias.** `WEBPOOL_MEDIA_DIR=$HOME/www/webpool-data/media` dans
+`~/www/webpool.env` : hors du dossier remplacé, le cache survit aux déploiements.
+Compter environ 25 Ko par vignette (250 Mo pour 10 000 liens) dans le quota du
+compte. `sharp` s'installe avec ses binaires linux-x64 lors du `pnpm install --prod`
+du staging.
+
 **Tâches planifiées** (*Avancé > Tâches planifiées*, syntaxe cron). Le CLI lit
 `.env` à la racine du dépôt quel que soit le répertoire courant, et sort en code 1
 sur erreur, ce qui déclenche le mail d'erreur d'alwaysdata. La tâche en place est
@@ -474,14 +515,15 @@ sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
 
 | Chemin | Rôle |
 |---|---|
-| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) ; `002` à `005` : domain_profile, search_query, search_query_run, exclusion_hash, api_client |
+| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) ; `002` à `008` : domain_profile, search_query, search_query_run, exclusion_hash, api_client, tuyaux, url_media |
 | `src/ingest/` | Providers SERP (`file`, `brave`, `searxng`, `europeana`, `flickr`, `openrouter`) + insertion tracée |
 | `src/normalize/` | Canonisation stricte (tracking, redirections, dédup domaine+canonique), fetch poli |
 | `src/classify/` | Classifieur par règles piloté par `config/taxonomy.json` |
 | `src/migrate.js` | Runner de migrations (`webpool migrate`) |
 | `src/explore/` | Frontière de requêtes, exclusion des domaines saturés, `explore` (fonctions pures dans `frontier.js` et `exclusion.js`) |
 | `src/domains/` | Registre des domaines et facette `usage-commercial` |
-| `src/cycle/` | `cycle` : explore, normalize, classify, refresh des pools |
+| `src/media/` | Type de média et famille de source (`kinds.js`), réduction d'images (`thumbnail.js`, sharp), cache `webpool media` |
+| `src/cycle/` | `cycle` : explore, normalize, classify, media, refresh des pools |
 | `src/pools/` | Définition JSON → SQL paramétré → matérialisation rangée → export |
 | `src/api/` | API HTTP en lecture seule (`serve`), clients et jetons ; routeur, paramètres et serveur testables sans base |
 | `openapi.json` | Contrat de l'API |

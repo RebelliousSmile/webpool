@@ -14,6 +14,7 @@ const openapi = async () => ({ raw: fs.readFileSync(OPENAPI_PATH, 'utf8'), conte
 export const routes = [
   { path: '/api/v1/health', scope: null, handler: h.health },
   { path: '/api/v1/openapi.json', scope: null, handler: openapi },
+  { path: '/api/v1/media/:file', scope: null, handler: h.getMedia },
   { path: '/api/v1/me', scope: 'read', handler: h.me },
   { path: '/api/v1/pools', scope: 'read', handler: h.listPools },
   { path: '/api/v1/pools/:slug', scope: 'read', handler: h.getPool },

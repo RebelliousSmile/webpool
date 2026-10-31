@@ -12,7 +12,12 @@ export function buildUrl(query, limit = 20, page = 0) {
 }
 
 export function mapResponse(data) {
-  return (data?.web?.results ?? []).map((r, i) => ({ url: r.url, rank: i + 1, title: r.title ?? null }));
+  return (data?.web?.results ?? []).map((r, i) => ({
+    url: r.url,
+    rank: i + 1,
+    title: r.title ?? null,
+    thumbnail: r.thumbnail?.src ?? null,
+  }));
 }
 
 export async function search({ query, limit, page }, { fetchImpl, apiKey = config.braveApiKey } = {}) {

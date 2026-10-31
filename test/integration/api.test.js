@@ -117,7 +117,11 @@ describe.skipIf(!available)('API HTTP sur PostgreSQL', () => {
     expect(items).toMatchObject({ total: 3, limit: 2, offset: 0 });
     expect(items.items.map((i) => i.rank)).toEqual([1, 2]);
     expect(items.items[0]).not.toHaveProperty('score');
-    expect(Object.keys(items.items[0]).sort()).toEqual(['domain', 'rank', 'title', 'url', 'usage_commercial']);
+    expect(Object.keys(items.items[0]).sort()).toEqual([
+      'description', 'domain', 'favicon', 'media_type', 'rank', 'source', 'thumbnail', 'title', 'url', 'usage_commercial',
+    ]);
+    // github.com : type déduit de l'URL (normalisé hors ligne), famille d'après le domaine
+    expect(items.items[0]).toMatchObject({ domain: 'github.com', media_type: 'code', source: 'community', thumbnail: null, favicon: null });
   });
 
   it("donne à l'admin définition, scores et identifiants", async () => {

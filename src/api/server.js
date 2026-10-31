@@ -15,7 +15,7 @@ const BASE_HEADERS = {
 };
 
 function send(res, status, body, headers = {}) {
-  const payload = typeof body === 'string' ? body : `${JSON.stringify(body)}\n`;
+  const payload = typeof body === 'string' || Buffer.isBuffer(body) ? body : `${JSON.stringify(body)}\n`;
   res.writeHead(status, {
     ...BASE_HEADERS,
     'Content-Type': 'application/json; charset=utf-8',
@@ -89,6 +89,7 @@ export function createApiServer({ routes, authenticate, corsOrigins = [], log = 
         return send(res, 200, result.raw, {
           ...cors,
           'Content-Type': result.contentType,
+          ...result.headers,
           ...(result.filename ? { 'Content-Disposition': `attachment; filename="${result.filename}"` } : {}),
         });
       }

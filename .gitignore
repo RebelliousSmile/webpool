@@ -3,3 +3,4 @@ node_modules/
 *.log
 deploy/targets.json
 coverage/
+var/

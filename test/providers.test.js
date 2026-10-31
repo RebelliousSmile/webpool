@@ -42,8 +42,8 @@ describe('providers SERP — contrat {url, rank, title}', () => {
 
   it('brave : mappe web.results', () => {
     expect(brave.mapResponse(fixture('brave-response.json'))).toEqual([
-      { url: 'https://civitai.com/models/1', rank: 1, title: 'Forest LoRA — Civitai' },
-      { url: 'https://example.com/no-title', rank: 2, title: null },
+      { url: 'https://civitai.com/models/1', rank: 1, title: 'Forest LoRA — Civitai', thumbnail: 'https://imgs.search.brave.com/abc.jpg' },
+      { url: 'https://example.com/no-title', rank: 2, title: null, thumbnail: null },
     ]);
     expect(brave.buildUrl('a b', 50).searchParams.get('count')).toBe('20');
   });
@@ -63,8 +63,13 @@ describe('providers SERP — contrat {url, rank, title}', () => {
 
   it('europeana : URL item depuis id, titre tableau ou chaîne, ignore sans id', () => {
     expect(europeana.mapResponse(fixture('europeana-response.json'))).toEqual([
-      { url: 'https://www.europeana.eu/item/2048128/Athena_Plus_ProvidedCHO_1', rank: 1, title: 'La forêt de Fontainebleau' },
-      { url: 'https://www.europeana.eu/item/9200/BibliographicResource_2', rank: 2, title: 'Titre simple' },
+      {
+        url: 'https://www.europeana.eu/item/2048128/Athena_Plus_ProvidedCHO_1',
+        rank: 1,
+        title: 'La forêt de Fontainebleau',
+        thumbnail: 'https://api.europeana.eu/thumbnail/v2/url.json?uri=x&type=IMAGE',
+      },
+      { url: 'https://www.europeana.eu/item/9200/BibliographicResource_2', rank: 2, title: 'Titre simple', thumbnail: null },
     ]);
     const url = europeana.buildUrl('forêt', 'KEY', 500);
     expect(url.searchParams.get('wskey')).toBe('KEY');
@@ -73,11 +78,17 @@ describe('providers SERP — contrat {url, rank, title}', () => {
 
   it('flickr : URL de page photo, titre vide → null, erreur API → exception', () => {
     expect(flickr.mapResponse(fixture('flickr-response.json'))).toEqual([
-      { url: 'https://www.flickr.com/photos/12345678@N00/53000001', rank: 1, title: 'Sous-bois en automne' },
-      { url: 'https://www.flickr.com/photos/87654321@N00/53000002', rank: 2, title: null },
+      {
+        url: 'https://www.flickr.com/photos/12345678@N00/53000001',
+        rank: 1,
+        title: 'Sous-bois en automne',
+        thumbnail: 'https://live.staticflickr.com/65535/53000001_abc_w.jpg',
+      },
+      { url: 'https://www.flickr.com/photos/87654321@N00/53000002', rank: 2, title: null, thumbnail: null },
     ]);
     expect(() => flickr.mapResponse(fixture('flickr-error.json'))).toThrow(/Invalid API Key.*100/);
     expect(flickr.buildUrl('x', 'K').searchParams.get('nojsoncallback')).toBe('1');
+    expect(flickr.buildUrl('x', 'K').searchParams.get('extras')).toBe('url_w');
   });
 
   it('search : appelle fetch avec la clé et mappe le résultat', async () => {
