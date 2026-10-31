@@ -35,5 +35,13 @@ export const config = Object.freeze({
   exploreQueryMaxChars: intEnv('WEBPOOL_EXPLORE_QUERY_MAX_CHARS', 400, 1),
   // intranet assumé : désactive la garde d'hôte de la normalisation
   allowPrivateHosts: ['1', 'true'].includes(process.env.WEBPOOL_ALLOW_PRIVATE_HOSTS ?? ''),
+  // API HTTP (webpool serve) : PORT et IP sont fournis par l'hébergeur (alwaysdata)
+  apiPort: process.env.WEBPOOL_API_PORT ? intEnv('WEBPOOL_API_PORT', 3000, 1) : intEnv('PORT', 3000, 1),
+  apiHost: process.env.WEBPOOL_API_HOST || process.env.IP || '127.0.0.1',
+  // origines autorisées par CORS (interface datapool), séparées par des virgules
+  apiCorsOrigins: (process.env.WEBPOOL_API_CORS_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean),
   userAgent: `webpool/${version} (+https://github.com/RebelliousSmile/webpool)`,
 });

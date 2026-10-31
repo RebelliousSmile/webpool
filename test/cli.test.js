@@ -42,6 +42,18 @@ describe('CLI', () => {
     expect(stderr).toContain('Sous-commande domain inconnue : frobnicate');
   });
 
+  it('refuse une sous-commande client inconnue avec le code 1', async () => {
+    const { code, stderr } = await cli('client', 'frobnicate');
+    expect(code).toBe(1);
+    expect(stderr).toContain('Sous-commande client inconnue : frobnicate');
+  });
+
+  it('refuse un --port invalide avant de démarrer le serveur', async () => {
+    const { code, stderr } = await cli('serve', '--port', 'abc');
+    expect(code).toBe(1);
+    expect(stderr).toContain('--port doit être un entier > 0');
+  });
+
   it('refuse --usage hors liste avant toute connexion', async () => {
     const { code, stderr } = await cli('domain', 'set', '--domain', 'a.com', '--usage', 'gratuit');
     expect(code).toBe(1);
