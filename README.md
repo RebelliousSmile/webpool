@@ -229,8 +229,9 @@ ressource : le droit d'usage commercial n'est qu'une facette parmi d'autres.
 ```bash
 # Frontière de requêtes (table search_query)
 pnpm webpool query add --provider brave --query "長崎 写真 フリー素材" --tags lieu:nagasaki,lang:ja
-pnpm webpool query import --file examples/japon/queries.json   # tableau ou {queries: []}, validé en entier avant insertion
+pnpm webpool query import --file examples/japon/queries.json   # tableau ou {queries: []}, validé en entier ; étiquette les requêtes connues
 pnpm webpool query list [--status active|exhausted|paused]     # page suivante, passages, domaines nouveaux, priorité
+pnpm webpool pipe list                                         # tuyaux : requêtes actives, pression, référence, tuyau courant (*)
 
 # Un passage : au plus N appels aux providers, une page par requête choisie
 pnpm webpool explore --budget 20 [--provider brave] [--limit 20]
@@ -260,6 +261,28 @@ tracées sous `brave`, mais la requête garde sa page et son état. La sortie
 d'`explore` l'indique par `openrouter→brave (repli : …)`. Pour le provider `file`, la requête est le chemin de l'export, et `{page}`
 y est remplacé par le numéro de page.
 
+**Tuyaux.** Un tuyau est un sujet : les requêtes étiquetées `flot:<slug>` en
+forment un, celles sans étiquette `flot:` forment le tuyau `defaut`. `explore`
+ne lance que les requêtes du tuyau courant, dans l'ordre de la frontière. Sa
+pression est le nombre de domaines nouveaux bien notés par appel réussi. Un
+domaine est bien noté quand sa meilleure URL classée atteint
+`WEBPOOL_PIPE_GOOD_SCORE` en moyenne de `relevance` et `quality`. Seuls comptent
+les appels jugés : plus aucune de leurs URLs n'attend `normalize` ou `classify`.
+La référence est la pression des `WEBPOOL_PIPE_WINDOW` premiers appels jugés
+depuis l'entrée dans le tuyau, la pression courante celle des
+`WEBPOOL_PIPE_WINDOW` derniers. Au début de chaque `explore`, le tuyau est
+quitté si sa pression tombe à `WEBPOOL_PIPE_DROP_RATIO` × sa référence ou en
+dessous (un tuyau stérile, à 0 pour 0, est donc quitté), ou s'il n'a plus de
+requête active. Le tuyau suivant est pris dans l'ordre de première apparition
+des étiquettes, avec retour au premier après le dernier ; y entrer remet sa
+référence à zéro. Quand le tuyau courant n'a plus de requête active en cours de
+passage, le reste du budget va au suivant, sans revenir à un tuyau quitté dans
+ce passage. Une requête OpenRouter s'épuise en un appel : tant que les requêtes
+ne sont pas reposées, c'est l'épuisement qui fait passer d'un tuyau à l'autre.
+`query import` ajoute aux requêtes déjà connues les étiquettes qui leur
+manquent, sans changer leur état. Il suffit donc de réimporter un fichier pour
+ranger ses requêtes dans un tuyau.
+
 **Exclusion des domaines saturés.** Avant chaque appel à Brave, la requête reçoit
 un suffixe `-site:` par domaine saturé : un domaine qui compte plus de
 `WEBPOOL_EXPLORE_SATURATION` URLs normalisées ou classées, ou qui a été exclu
@@ -286,7 +309,7 @@ les suivantes. Le code de sortie vaut 1 si une étape échoue entièrement :
 exception, échec de chaque appel aux providers, ou échec de chaque pool.
 
 Exemple : le jeu [`examples/japon/`](examples/japon/) contient 24 requêtes
-(japonais, anglais, français ; tags `lieu:*` et `lang:*`) et des pools par lieu
+(japonais, anglais, français ; tags `flot:japon`, `lieu:*` et `lang:*`) et des pools par lieu
 en ordre `rarity`, dont `nagasaki-libre` (`usage-commercial` = `libre`) :
 
 ```bash
@@ -304,6 +327,9 @@ pnpm webpool domain list --to-qualify
 | `WEBPOOL_EXPLORE_DRY_RUNS` | 2 | passages consécutifs sans URL nouvelle avant épuisement |
 | `WEBPOOL_EXPLORE_SATURATION` | 50 | URLs au-delà desquelles un domaine est écarté des requêtes Brave |
 | `WEBPOOL_EXPLORE_QUERY_MAX_CHARS` | 400 | longueur maximale d'une requête envoyée, suffixe `-site:` compris |
+| `WEBPOOL_PIPE_GOOD_SCORE` | 0.5 | moyenne `relevance`/`quality` de la meilleure URL classée d'un domaine bien noté (entre 0 et 1) |
+| `WEBPOOL_PIPE_WINDOW` | 3 | appels jugés de la référence et de la pression courante |
+| `WEBPOOL_PIPE_DROP_RATIO` | 0.5 | fraction de la référence à laquelle ou sous laquelle le tuyau est quitté (entre 0 et 1) |
 
 Limites :
 

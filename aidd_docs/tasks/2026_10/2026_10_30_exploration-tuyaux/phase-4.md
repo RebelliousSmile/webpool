@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 <!-- Fill or omit these sections; never add, rename, or reorder one. -->
@@ -12,7 +12,8 @@ status: pending
 
 ```txt
 .
-├── src/explore/index.js                       ✏️ query import ajoute les étiquettes manquantes aux requêtes existantes (aujourd'hui ON CONFLICT DO NOTHING)
+├── db/migrations/006_explore_pipe.sql         ✏️ entered_after : dernier id d'appel à l'entrée dans le tuyau (006 n'est pas encore en production)
+├── src/explore/index.js                       ✏️ query import ajoute les étiquettes manquantes aux requêtes existantes (aujourd'hui ON CONFLICT DO NOTHING) ; mesure des tuyaux par id d'appel
 ├── examples/creatures/queries.json            ✏️ flot:creatures
 ├── examples/japon/queries.json                ✏️ flot:japon
 ├── examples/psychologie-2025/queries.json     ✏️ flot:psychologie-2025
@@ -61,6 +62,8 @@ journey
 
 1. `ON CONFLICT (provider, query) DO UPDATE SET tags` = union sans doublon, rien d'autre ; le résumé d'import distingue ajoutées et mises à jour.
 2. Ajouter `flot:<exemple>` à chaque requête des quatre fichiers d'exemple.
+
+> Écart : la visite d'un tuyau est délimitée par l'id du dernier appel à l'entrée (`entered_after`) et non plus par `entered_at`. L'horloge du PostgreSQL local (Docker sous WSL2) a reculé d'environ 2 s pendant un test : des appels de la visite se retrouvaient datés avant l'entrée et sortaient de la mesure. La séquence des ids ne recule pas. Test « horloge qui recule ».
 
 ### `2)` Documentation
 

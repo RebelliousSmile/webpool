@@ -1,19 +1,19 @@
 {
   "queries": [
-    { "provider": "openrouter", "query": "mutant sea creature concept art", "tags": ["sujet:creatures", "element:eau", "lang:en"] },
-    { "provider": "openrouter", "query": "aquatic monster illustration", "tags": ["sujet:creatures", "element:eau", "lang:en"] },
-    { "provider": "openrouter", "query": "abyssal deep sea creature design", "tags": ["sujet:creatures", "element:eau", "lang:en"] },
-    { "provider": "openrouter", "query": "leviathan kraken fantasy illustration", "tags": ["sujet:creatures", "element:eau", "lang:en"] },
-    { "provider": "brave", "query": "site:artstation.com aquatic creature mutant", "tags": ["sujet:creatures", "element:eau", "lang:en"] },
-    { "provider": "brave", "query": "site:deviantart.com mutant sea monster", "tags": ["sujet:creatures", "element:eau", "lang:en"] },
-    { "provider": "openrouter", "query": "créature mutante aquatique illustration", "tags": ["sujet:creatures", "element:eau", "lang:fr"] },
-    { "provider": "openrouter", "query": "monstre marin fantastique dessin", "tags": ["sujet:creatures", "element:eau", "lang:fr"] },
-    { "provider": "openrouter", "query": "flying mutant creature concept art", "tags": ["sujet:creatures", "element:air", "lang:en"] },
-    { "provider": "openrouter", "query": "winged monster creature design", "tags": ["sujet:creatures", "element:air", "lang:en"] },
-    { "provider": "openrouter", "query": "sky beast fantasy illustration", "tags": ["sujet:creatures", "element:air", "lang:en"] },
-    { "provider": "openrouter", "query": "harpy wyvern storm creature art", "tags": ["sujet:creatures", "element:air", "lang:en"] },
-    { "provider": "brave", "query": "site:artstation.com flying creature mutant", "tags": ["sujet:creatures", "element:air", "lang:en"] },
-    { "provider": "openrouter", "query": "créature volante mutante illustration", "tags": ["sujet:creatures", "element:air", "lang:fr"] },
-    { "provider": "openrouter", "query": "bestiaire fantastique créatures ailées", "tags": ["sujet:creatures", "element:air", "lang:fr"] }
+    { "provider": "openrouter", "query": "mutant sea creature concept art", "tags": ["flot:creatures", "sujet:creatures", "element:eau", "lang:en"] },
+    { "provider": "openrouter", "query": "aquatic monster illustration", "tags": ["flot:creatures", "sujet:creatures", "element:eau", "lang:en"] },
+    { "provider": "openrouter", "query": "abyssal deep sea creature design", "tags": ["flot:creatures", "sujet:creatures", "element:eau", "lang:en"] },
+    { "provider": "openrouter", "query": "leviathan kraken fantasy illustration", "tags": ["flot:creatures", "sujet:creatures", "element:eau", "lang:en"] },
+    { "provider": "brave", "query": "site:artstation.com aquatic creature mutant", "tags": ["flot:creatures", "sujet:creatures", "element:eau", "lang:en"] },
+    { "provider": "brave", "query": "site:deviantart.com mutant sea monster", "tags": ["flot:creatures", "sujet:creatures", "element:eau", "lang:en"] },
+    { "provider": "openrouter", "query": "créature mutante aquatique illustration", "tags": ["flot:creatures", "sujet:creatures", "element:eau", "lang:fr"] },
+    { "provider": "openrouter", "query": "monstre marin fantastique dessin", "tags": ["flot:creatures", "sujet:creatures", "element:eau", "lang:fr"] },
+    { "provider": "openrouter", "query": "flying mutant creature concept art", "tags": ["flot:creatures", "sujet:creatures", "element:air", "lang:en"] },
+    { "provider": "openrouter", "query": "winged monster creature design", "tags": ["flot:creatures", "sujet:creatures", "element:air", "lang:en"] },
+    { "provider": "openrouter", "query": "sky beast fantasy illustration", "tags": ["flot:creatures", "sujet:creatures", "element:air", "lang:en"] },
+    { "provider": "openrouter", "query": "harpy wyvern storm creature art", "tags": ["flot:creatures", "sujet:creatures", "element:air", "lang:en"] },
+    { "provider": "brave", "query": "site:artstation.com flying creature mutant", "tags": ["flot:creatures", "sujet:creatures", "element:air", "lang:en"] },
+    { "provider": "openrouter", "query": "créature volante mutante illustration", "tags": ["flot:creatures", "sujet:creatures", "element:air", "lang:fr"] },
+    { "provider": "openrouter", "query": "bestiaire fantastique créatures ailées", "tags": ["flot:creatures", "sujet:creatures", "element:air", "lang:fr"] }
   ]
 }

@@ -50,8 +50,8 @@ describe.skipIf(!available)('exploration sur PostgreSQL', () => {
       { provider: 'file', query: 'b' },
       { provider: 'brave', query: 'a' },
     ]);
-    expect(await ex.importQueries(file)).toEqual({ added: 3, skipped: 0 });
-    expect(await ex.importQueries(file)).toEqual({ added: 0, skipped: 3 });
+    expect(await ex.importQueries(file)).toEqual({ added: 3, updated: 0, skipped: 0 });
+    expect(await ex.importQueries(file)).toEqual({ added: 0, updated: 0, skipped: 3 });
 
     const rows = await ex.listQueries({ status: 'active' });
     expect(rows.map((q) => [q.provider, q.query, q.tags, q.priority])).toEqual([
@@ -63,6 +63,23 @@ describe.skipIf(!available)('exploration sur PostgreSQL', () => {
     const bad = writeTempJson('bad.json', [{ provider: 'file', query: 'c' }, { provider: 'altavista', query: 'd' }]);
     await expect(ex.importQueries(bad)).rejects.toThrow(/Provider inconnu : altavista/);
     expect((await ex.listQueries()).length).toBe(3);
+  });
+
+  it('query import : étiquette une requête connue sans toucher à son état ni doubler une étiquette', async () => {
+    const q = await ex.addQuery({ provider: 'file', query: pages('t', [['https://t.com/1'], ['https://t.com/2'], ['https://t.com/3']]), tags: ['lang:ja'] });
+    await explore({ budget: 1 });
+    await explore({ budget: 1 });
+    const before = await row(q.id);
+    expect(before).toMatchObject({ runs: 2, next_page: 2, status: 'active' });
+
+    const file = writeTempJson('t.json', [
+      { provider: 'file', query: q.query, tags: ['flot:japon', 'lang:ja'] },
+      { provider: 'file', query: q.query, tags: ['flot:japon'] },
+    ]);
+    expect(await ex.importQueries(file)).toEqual({ added: 0, updated: 1, skipped: 0 });
+    expect(await ex.importQueries(file)).toEqual({ added: 0, updated: 0, skipped: 1 });
+    expect((await query('SELECT tags FROM search_query WHERE id = $1', [q.id])).rows[0].tags).toEqual(['lang:ja', 'flot:japon']);
+    expect(await row(q.id)).toEqual(before);
   });
 
   it('query add : refuse un doublon et un provider inconnu', async () => {
@@ -310,13 +327,13 @@ describe.skipIf(!available)('exploration sur PostgreSQL', () => {
       for (const i of [0, 1, 2]) await tagged('b', `b${i}`, [doms(`b${i}-`, 1)]);
       for (const i of [0, 1, 2]) await tagged(null, `d${i}`, [doms(`d${i}-`, 1)]);
 
-      expect(await explore({ budget: 3 })).toMatchObject({ pipes: ['a'], calls: 3, newDomains: 12 });
+      expect(await explore({ budget: 3 })).toMatchObject({ pipes: ['a'], calls: 3, errors: 0, newDomains: 12 });
       await judge(0.9);
       // Référence 4 et pression 4 : on reste.
-      expect((await explore({ budget: 3 })).pipes).toEqual(['a']);
+      expect(await explore({ budget: 3 })).toMatchObject({ pipes: ['a'], errors: 0 });
       await judge(0.9);
       // Pression 1 ≤ 0,5 × 4 : bascule.
-      expect((await explore({ budget: 3 })).pipes).toEqual(['b']);
+      expect(await explore({ budget: 3 })).toMatchObject({ pipes: ['b'], errors: 0 });
       const listed = await ex.listPipes();
       expect(listed.map((x) => [x.slug, x.active, x.current, x.reference, x.pressure, x.judged])).toEqual([
         ['a', 3, false, 4, 1, 6],
@@ -325,11 +342,20 @@ describe.skipIf(!available)('exploration sur PostgreSQL', () => {
       ]);
       // b stérile (référence et pression nulles) : quitté pour defaut, puis defaut pour a.
       await judge(0.1);
-      expect((await explore({ budget: 3 })).pipes).toEqual(['defaut']);
+      expect(await explore({ budget: 3 })).toMatchObject({ pipes: ['defaut'], errors: 0 });
       await judge(0.1);
-      expect((await explore({ budget: 3 })).pipes).toEqual(['a']);
+      expect(await explore({ budget: 3 })).toMatchObject({ pipes: ['a'], errors: 0 });
       // Nouvelle visite : la référence de a repart de zéro.
       expect((await ex.listPipes())[0]).toMatchObject({ slug: 'a', current: true, reference: null, judged: 0 });
+    });
+
+    it('horloge qui recule : les appels de la visite comptent toujours', async () => {
+      for (const i of [0, 1, 2]) await tagged('a', `h${i}`, [doms(`h${i}p0-`, 2), doms(`h${i}p1-`, 1)]);
+      await explore({ budget: 3 });
+      // Appels datés avant l'entrée dans le tuyau, comme après un recul de l'horloge.
+      await query("UPDATE search_query_run SET ran_at = ran_at - interval '1 hour'");
+      await judge(0.9);
+      expect((await ex.listPipes())[0]).toMatchObject({ slug: 'a', current: true, reference: 2, pressure: 2, judged: 3 });
     });
 
     it('tuyau vidé en cours de passage : le reste du budget passe au suivant', async () => {

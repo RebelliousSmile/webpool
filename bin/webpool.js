@@ -29,7 +29,7 @@ Usage :
   webpool domain exclude --domain <domaine>   (écarté des requêtes Brave par -site:, en plus des domaines saturés)
   webpool domain include --domain <domaine>
   webpool query add --provider <p> --query "…" [--tags a,b]
-  webpool query import --file requetes.json      (liste de {provider, query, tags})
+  webpool query import --file requetes.json      (liste de {provider, query, tags} ; ajoute les étiquettes manquantes aux requêtes connues)
   webpool query list [--status active|exhausted|paused]
   webpool pipe list                        (tuyaux flot:<slug> : requêtes actives, pression et référence de la dernière visite)
   webpool explore --budget N [--provider p] [--limit N]   (au plus N appels aux providers, ceux du tuyau courant d'abord)
@@ -182,7 +182,7 @@ async function main() {
       } else if (subcommand === 'import') {
         if (!values.file) throw new Error('query import : --file requis');
         const res = await importQueries(values.file);
-        console.log(`Requêtes importées : ${res.added} ajoutées, ${res.skipped} déjà connues.`);
+        console.log(`Requêtes importées : ${res.added} ajoutées, ${res.updated} étiquetées, ${res.skipped} déjà connues.`);
       } else if (subcommand === 'list') {
         const rows = await listQueries({ status: values.status });
         for (const q of rows) {

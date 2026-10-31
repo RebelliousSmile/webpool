@@ -48,23 +48,37 @@ export async function addQuery({ provider, query: text, tags = [] }) {
   return { id: Number(rows[0].id), ...entry };
 }
 
-// Le fichier est validé en entier avant toute insertion ; les requêtes déjà
-// connues sont ignorées et comptées.
+// Le fichier est validé en entier avant toute insertion. Une requête déjà
+// connue reçoit les étiquettes qui lui manquent, sans toucher à son état ; une
+// requête répétée dans le fichier n'est importée qu'une fois.
 export async function importQueries(file) {
   const data = JSON.parse(fs.readFileSync(file, 'utf8'));
   const list = Array.isArray(data) ? data : data?.queries;
   if (!Array.isArray(list)) throw new Error('Format inattendu : tableau ou {queries: []} requis');
-  const entries = list.map((e, i) => checkEntry(e, ` (entrée ${i + 1})`));
-  if (entries.length === 0) return { added: 0, skipped: 0 };
-  const { rowCount } = await query(
-    `INSERT INTO search_query (provider, query, tags)
+  const byKey = new Map();
+  list.forEach((e, i) => {
+    const entry = checkEntry(e, ` (entrée ${i + 1})`);
+    const key = JSON.stringify([entry.provider, entry.query]);
+    const seen = byKey.get(key);
+    if (seen) seen.tags = [...new Set([...seen.tags, ...entry.tags])];
+    else byKey.set(key, { ...entry, tags: [...new Set(entry.tags)] });
+  });
+  const entries = [...byKey.values()];
+  if (entries.length === 0) return { added: 0, updated: 0, skipped: 0 };
+  const { rows } = await query(
+    `INSERT INTO search_query AS sq (provider, query, tags)
      SELECT p, q, coalesce(
               (SELECT array_agg(x) FROM jsonb_array_elements_text(t) AS x), '{}')
        FROM unnest($1::text[], $2::text[], $3::jsonb[]) AS e(p, q, t)
-     ON CONFLICT (provider, query) DO NOTHING`,
+     ON CONFLICT (provider, query) DO UPDATE
+        SET tags = sq.tags || ARRAY(SELECT x FROM unnest(EXCLUDED.tags) AS x WHERE x <> ALL (sq.tags))
+      WHERE NOT sq.tags @> EXCLUDED.tags
+     RETURNING (xmax = 0) AS inserted`,
     [entries.map((e) => e.provider), entries.map((e) => e.query), entries.map((e) => JSON.stringify(e.tags))],
   );
-  return { added: rowCount, skipped: entries.length - rowCount };
+  const added = rows.filter((r) => r.inserted).length;
+  const updated = rows.length - added;
+  return { added, updated, skipped: entries.length - rows.length };
 }
 
 // Rendement agrégé depuis search_query_run : seuls les passages réussis comptent.
@@ -157,31 +171,34 @@ async function loadSaturated(threshold) {
 }
 
 async function currentPipe() {
-  const { rows } = await query('SELECT slug, entered_at FROM explore_pipe WHERE is_current');
-  return rows[0] ? { slug: rows[0].slug, enteredAt: rows[0].entered_at } : null;
+  const { rows } = await query('SELECT slug, entered_after FROM explore_pipe WHERE is_current');
+  return rows[0] ? { slug: rows[0].slug, enteredAfter: rows[0].entered_after } : null;
 }
 
 // Entrer dans un tuyau (y compris celui qu'on quitte) remet sa référence à zéro.
 async function enterPipe(slug) {
   await query('UPDATE explore_pipe SET is_current = false WHERE is_current AND slug <> $1', [slug]);
   await query(
-    `INSERT INTO explore_pipe (slug, entered_at, is_current) VALUES ($1, now(), true)
-     ON CONFLICT (slug) DO UPDATE SET entered_at = now(), is_current = true`,
+    `INSERT INTO explore_pipe (slug, entered_at, entered_after, is_current)
+     VALUES ($1, now(), (SELECT coalesce(max(id), 0) FROM search_query_run), true)
+     ON CONFLICT (slug) DO UPDATE
+        SET entered_at = EXCLUDED.entered_at, entered_after = EXCLUDED.entered_after, is_current = true`,
     [slug],
   );
 }
 
-// Appels réussis des requêtes `ids` depuis `since`, dans l'ordre. Un appel est
+// Appels réussis des requêtes `ids` postérieurs à l'appel `after`, dans
+// l'ordre des ids (l'horloge peut reculer, pas la séquence). Un appel est
 // jugé quand plus aucune de ses URLs ni aucune URL de ses domaines nouveaux
 // n'attend normalize ou classify (les URLs en attente n'ont pas encore de
 // domaine : elles sont retrouvées par url_source). Un domaine est bien noté par
 // sa meilleure URL classée.
-async function pipeRuns(ids, since, goodScore) {
+async function pipeRuns(ids, after, goodScore) {
   if (ids.length === 0) return [];
   const { rows } = await query(
     `WITH runs AS (
-       SELECT id, ran_at, ingest_run_id FROM search_query_run
-        WHERE search_query_id = ANY($1) AND error IS NULL AND ran_at >= $2
+       SELECT id, ingest_run_id FROM search_query_run
+        WHERE search_query_id = ANY($1) AND error IS NULL AND id > $2
      ), doms AS (
        SELECT runs.id AS run,
               bool_or(ui.status IN ('pending', 'normalized')) AS waiting,
@@ -197,29 +214,29 @@ async function pipeRuns(ids, since, goodScore) {
               OR coalesce(bool_or(d.waiting), false) AS waiting,
             count(*) FILTER (WHERE d.best >= $3)::int AS good
        FROM runs LEFT JOIN doms d ON d.run = runs.id
-      GROUP BY runs.id, runs.ran_at, runs.ingest_run_id
-      ORDER BY runs.ran_at, runs.id`,
-    [ids, since, goodScore],
+      GROUP BY runs.id, runs.ingest_run_id
+      ORDER BY runs.id`,
+    [ids, after, goodScore],
   );
   return rows.map((r) => ({ judged: !r.waiting, goodDomains: r.good }));
 }
 
 // Mesure d'un tuyau sur sa dernière visite (appels depuis son entrée).
-async function measurePipe(slug, enteredAt, queries, { goodScore, window }) {
+async function measurePipe(slug, enteredAfter, queries, { goodScore, window }) {
   const ids = queries.filter((q) => pipeOf(q.tags) === slug).map((q) => q.id);
-  return visitPressures(await pipeRuns(ids, enteredAt, goodScore), window);
+  return visitPressures(await pipeRuns(ids, enteredAfter, goodScore), window);
 }
 
 // Tuyaux dans leur ordre de rotation : requêtes actives, mesure de la dernière
 // visite, tuyau courant.
 export async function listPipes({ goodScore = config.pipeGoodScore, window = config.pipeWindow } = {}) {
   const all = await loadQueries();
-  const { rows } = await query('SELECT slug, entered_at, is_current FROM explore_pipe');
+  const { rows } = await query('SELECT slug, entered_at, entered_after, is_current FROM explore_pipe');
   const state = new Map(rows.map((r) => [r.slug, r]));
   const out = [];
   for (const slug of pipeOrder(all)) {
     const s = state.get(slug);
-    const measure = s ? await measurePipe(slug, s.entered_at, all, { goodScore, window }) : null;
+    const measure = s ? await measurePipe(slug, s.entered_after, all, { goodScore, window }) : null;
     out.push({
       slug,
       active: all.filter((q) => q.status === 'active' && pipeOf(q.tags) === slug).length,
@@ -366,7 +383,7 @@ export async function explore({
       pipe = order.find((slug) => activeIn(slug).length > 0) ?? null;
       if (pipe !== null) await enterPipe(pipe);
     } else {
-      const measure = await measurePipe(pipe, current.enteredAt, all, { goodScore, window });
+      const measure = await measurePipe(pipe, current.enteredAfter, all, { goodScore, window });
       if (shouldSwitch({ ...measure, dropRatio, activeQueries: activeIn(pipe).length })) {
         left.add(pipe);
         pipe = nextPipe(order, pipe, empty());

@@ -12,7 +12,7 @@ status: done
 
 ```txt
 .
-├── db/migrations/006_explore_pipe.sql ✅ explore_pipe(slug PK, entered_at, is_current) ; la référence se recalcule, elle n'est pas stockée
+├── db/migrations/006_explore_pipe.sql ✅ explore_pipe(slug PK, entered_at, entered_after, is_current) ; la référence se recalcule, elle n'est pas stockée (entered_after ajouté en phase 4)
 ├── src/explore/pipes.js               ✅ pipeOf(tags), pressure(runs), shouldSwitch(...), nextPipe(...) : fonctions pures
 ├── src/explore/index.js               ✏️ explore : évalue le tuyau courant, choisit ses requêtes, passe le reste du budget au suivant
 ├── src/config.js                      ✏️ pipeGoodScore (0,5), pipeWindow (3), pipeDropRatio (0,5), variables WEBPOOL_PIPE_*
@@ -71,7 +71,7 @@ journey
 > Tout le raisonnement se teste sans base.
 
 1. `pipeOf(tags)` : slug de la première étiquette `flot:`, sinon `defaut`.
-2. Un appel est jugé quand aucune URL de ses domaines nouveaux n'est en `pending` ni en `normalized` (`error` et `duplicate` comptent comme terminées) ; un domaine sans URL classée n'est pas bien noté. `pressure(judgedRuns)` = domaines bien notés ÷ appels réussis. La référence de la visite est la pression des `window` premiers appels jugés depuis `entered_at` ; la pression courante, celle des `window` derniers ; `null` tant qu'il y a moins de `window` appels jugés, et aucune bascule sur `null`. Bascule quand pression ≤ `dropRatio` × référence : un tuyau dont la référence et la pression sont nulles bascule.
+2. Un appel est jugé quand aucune URL de ses domaines nouveaux n'est en `pending` ni en `normalized` (`error` et `duplicate` comptent comme terminées) ; un domaine sans URL classée n'est pas bien noté. `pressure(judgedRuns)` = domaines bien notés ÷ appels réussis. La référence de la visite est la pression des `window` premiers appels jugés depuis l'entrée (`entered_after`, voir phase 4) ; la pression courante, celle des `window` derniers ; `null` tant qu'il y a moins de `window` appels jugés, et aucune bascule sur `null`. Bascule quand pression ≤ `dropRatio` × référence : un tuyau dont la référence et la pression sont nulles bascule.
 3. `shouldSwitch({ pressure, reference, dropRatio, activeQueries })` et `nextPipe(pipes, current)` dans l'ordre de première apparition, avec retour au premier.
 
 ### `2)` État et requêtes

@@ -93,13 +93,13 @@ describe.skipIf(!available)('cycle sur PostgreSQL', () => {
 
   it("exemple japon : les requêtes s'importent avec leurs tags, les pools se créent", async () => {
     const dir = path.join(import.meta.dirname, '..', '..', 'examples', 'japon');
-    expect(await ex.importQueries(path.join(dir, 'queries.json'))).toEqual({ added: 24, skipped: 0 });
+    expect(await ex.importQueries(path.join(dir, 'queries.json'))).toEqual({ added: 24, updated: 0, skipped: 0 });
     const rows = await ex.listQueries({ status: 'active' });
     expect(rows).toHaveLength(24);
     for (const q of rows) {
-      expect(q.tags).toEqual([expect.stringMatching(/^lieu:(nagasaki|goto|kyoto|tokyo)$/), expect.stringMatching(/^lang:(ja|en|fr)$/)]);
+      expect(q.tags).toEqual(['flot:japon', expect.stringMatching(/^lieu:(nagasaki|goto|kyoto|tokyo)$/), expect.stringMatching(/^lang:(ja|en|fr)$/)]);
     }
-    expect(new Set(rows.map((q) => q.tags[1]))).toEqual(new Set(['lang:ja', 'lang:en', 'lang:fr']));
+    expect(new Set(rows.map((q) => q.tags[2]))).toEqual(new Set(['lang:ja', 'lang:en', 'lang:fr']));
 
     const cls = await import('../../src/classify/index.js');
     await cls.classifyPending(); // synchronise les facettes lieu et usage-commercial

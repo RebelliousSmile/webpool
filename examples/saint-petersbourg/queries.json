@@ -1,19 +1,19 @@
 {
   "queries": [
-    { "provider": "openrouter", "query": "социология Петербурга исследование", "tags": ["sujet:sociologie", "lieu:saint-petersbourg", "lang:ru"] },
-    { "provider": "openrouter", "query": "городская социология Санкт-Петербург", "tags": ["sujet:sociologie", "lieu:saint-petersbourg", "lang:ru"] },
-    { "provider": "brave", "query": "site:cyberleninka.ru социология Санкт-Петербург", "tags": ["sujet:sociologie", "lieu:saint-petersbourg", "lang:ru"] },
-    { "provider": "openrouter", "query": "Европейский университет в Санкт-Петербурге социология", "tags": ["sujet:sociologie", "lieu:saint-petersbourg", "lang:ru"] },
-    { "provider": "openrouter", "query": "sociology of St Petersburg Russia study", "tags": ["sujet:sociologie", "lieu:saint-petersbourg", "lang:en"] },
-    { "provider": "openrouter", "query": "St Petersburg urban sociology ethnography", "tags": ["sujet:sociologie", "lieu:saint-petersbourg", "lang:en"] },
-    { "provider": "openrouter", "query": "sociologie Saint-Pétersbourg enquête", "tags": ["sujet:sociologie", "lieu:saint-petersbourg", "lang:fr"] },
-    { "provider": "openrouter", "query": "необычные места Санкт-Петербурга", "tags": ["sujet:insolite", "lieu:saint-petersbourg", "lang:ru"] },
-    { "provider": "openrouter", "query": "заброшенные места Петербурга", "tags": ["sujet:insolite", "lieu:saint-petersbourg", "lang:ru"] },
-    { "provider": "openrouter", "query": "секретные места Санкт-Петербурга", "tags": ["sujet:insolite", "lieu:saint-petersbourg", "lang:ru"] },
-    { "provider": "openrouter", "query": "unusual places in Saint Petersburg Russia", "tags": ["sujet:insolite", "lieu:saint-petersbourg", "lang:en"] },
-    { "provider": "openrouter", "query": "hidden gems St Petersburg Russia", "tags": ["sujet:insolite", "lieu:saint-petersbourg", "lang:en"] },
-    { "provider": "brave", "query": "site:atlasobscura.com saint petersburg russia", "tags": ["sujet:insolite", "lieu:saint-petersbourg", "lang:en"] },
-    { "provider": "openrouter", "query": "lieux insolites Saint-Pétersbourg", "tags": ["sujet:insolite", "lieu:saint-petersbourg", "lang:fr"] },
-    { "provider": "openrouter", "query": "Saint-Pétersbourg secret curiosités", "tags": ["sujet:insolite", "lieu:saint-petersbourg", "lang:fr"] }
+    { "provider": "openrouter", "query": "социология Петербурга исследование", "tags": ["flot:saint-petersbourg", "sujet:sociologie", "lieu:saint-petersbourg", "lang:ru"] },
+    { "provider": "openrouter", "query": "городская социология Санкт-Петербург", "tags": ["flot:saint-petersbourg", "sujet:sociologie", "lieu:saint-petersbourg", "lang:ru"] },
+    { "provider": "brave", "query": "site:cyberleninka.ru социология Санкт-Петербург", "tags": ["flot:saint-petersbourg", "sujet:sociologie", "lieu:saint-petersbourg", "lang:ru"] },
+    { "provider": "openrouter", "query": "Европейский университет в Санкт-Петербурге социология", "tags": ["flot:saint-petersbourg", "sujet:sociologie", "lieu:saint-petersbourg", "lang:ru"] },
+    { "provider": "openrouter", "query": "sociology of St Petersburg Russia study", "tags": ["flot:saint-petersbourg", "sujet:sociologie", "lieu:saint-petersbourg", "lang:en"] },
+    { "provider": "openrouter", "query": "St Petersburg urban sociology ethnography", "tags": ["flot:saint-petersbourg", "sujet:sociologie", "lieu:saint-petersbourg", "lang:en"] },
+    { "provider": "openrouter", "query": "sociologie Saint-Pétersbourg enquête", "tags": ["flot:saint-petersbourg", "sujet:sociologie", "lieu:saint-petersbourg", "lang:fr"] },
+    { "provider": "openrouter", "query": "необычные места Санкт-Петербурга", "tags": ["flot:saint-petersbourg", "sujet:insolite", "lieu:saint-petersbourg", "lang:ru"] },
+    { "provider": "openrouter", "query": "заброшенные места Петербурга", "tags": ["flot:saint-petersbourg", "sujet:insolite", "lieu:saint-petersbourg", "lang:ru"] },
+    { "provider": "openrouter", "query": "секретные места Санкт-Петербурга", "tags": ["flot:saint-petersbourg", "sujet:insolite", "lieu:saint-petersbourg", "lang:ru"] },
+    { "provider": "openrouter", "query": "unusual places in Saint Petersburg Russia", "tags": ["flot:saint-petersbourg", "sujet:insolite", "lieu:saint-petersbourg", "lang:en"] },
+    { "provider": "openrouter", "query": "hidden gems St Petersburg Russia", "tags": ["flot:saint-petersbourg", "sujet:insolite", "lieu:saint-petersbourg", "lang:en"] },
+    { "provider": "brave", "query": "site:atlasobscura.com saint petersburg russia", "tags": ["flot:saint-petersbourg", "sujet:insolite", "lieu:saint-petersbourg", "lang:en"] },
+    { "provider": "openrouter", "query": "lieux insolites Saint-Pétersbourg", "tags": ["flot:saint-petersbourg", "sujet:insolite", "lieu:saint-petersbourg", "lang:fr"] },
+    { "provider": "openrouter", "query": "Saint-Pétersbourg secret curiosités", "tags": ["flot:saint-petersbourg", "sujet:insolite", "lieu:saint-petersbourg", "lang:fr"] }
   ]
 }
