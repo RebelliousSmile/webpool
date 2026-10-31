@@ -47,9 +47,22 @@ export function toCsv({ items }, { client = false } = {}) {
   return `${lines.join('\n')}\n`;
 }
 
-// Les titres viennent du web : le HTML est échappé, un rendu Markdown n'exécute rien.
-const escapeHtml = (s) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-const mdCell = (s) => escapeHtml(String(s ?? '')).replaceAll('|', '\\|').replace(/\s+/g, ' ').trim();
+// Les titres viennent du web : ni HTML, ni lien, ni mise en forme ne doivent en
+// sortir. Un seul passage, donc l'antislash est traité avant le reste : un `\]`
+// du titre devient `\\\]` et ne referme pas le texte du lien. `\ [ ] ( ) | * _
+// ` !` prennent un antislash ; `& < >` deviennent des entités, comprises par
+// tous les rendus Markdown (un `\<` ne l'est pas des plus anciens).
+const MD_ENTITIES = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
+export const escapeMarkdown = (s) =>
+  String(s ?? '')
+    .replace(/[\\[\]()|*_`!&<>]/g, (c) => MD_ENTITIES[c] ?? `\\${c}`)
+    .replace(/\s+/g, ' ')
+    .trim();
+const mdCell = escapeMarkdown;
+
+// Destination d'un lien : ce qui la fermerait ou couperait la cellule est encodé.
+const mdUrl = (url) =>
+  url.replace(/[()\\<>|\s]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
 
 export function toMarkdown({ pool, items }, { client = false } = {}) {
   const lines = [
@@ -62,7 +75,7 @@ export function toMarkdown({ pool, items }, { client = false } = {}) {
   ];
   for (const it of items) {
     const title = mdCell(it.title) || mdCell(it.canonical_url);
-    const link = `[${title.replaceAll(']', '\\]')}](${it.canonical_url.replaceAll(')', '%29')})`;
+    const link = `[${title}](${mdUrl(it.canonical_url)})`;
     lines.push(`| ${it.rank} | ${link} | ${mdCell(it.domain)} |${client ? '' : ` ${Number(it.score).toFixed(3)} |`}`);
   }
   return `${lines.join('\n')}\n`;
