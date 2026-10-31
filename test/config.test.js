@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import { config } from '../src/config.js';
-import { defaultDatabaseUrl, intEnv, numberEnv, ratioEnv } from '../src/env.js';
+import { defaultDatabaseUrl, intEnv, numberEnv, ratioEnv, resolveDatabaseUrl } from '../src/env.js';
 
 describe('config', () => {
   it('est gelée : une modification lève une erreur', () => {
@@ -72,5 +72,34 @@ describe('defaultDatabaseUrl', () => {
 
   it('suit WEBPOOL_DB_PORT', () => {
     expect(defaultDatabaseUrl({ WEBPOOL_DB_PORT: '5433' })).toBe('postgres://webpool:webpool@localhost:5433/webpool');
+  });
+});
+
+describe('resolveDatabaseUrl', () => {
+  const local = 'postgres://webpool:webpool@localhost:5432/webpool';
+
+  it('prend DATABASE_URL quand elle est définie, quel que soit NODE_ENV', () => {
+    expect(resolveDatabaseUrl({ DATABASE_URL: 'postgres://u@h/b', NODE_ENV: 'production' })).toBe('postgres://u@h/b');
+  });
+
+  it.each([[undefined], [''], ['development'], ['test']])('se rabat sur le conteneur local si NODE_ENV=%s', (nodeEnv) => {
+    expect(resolveDatabaseUrl(nodeEnv === undefined ? {} : { NODE_ENV: nodeEnv })).toBe(local);
+  });
+
+  it.each(['production', 'staging'])('arrête net sans DATABASE_URL si NODE_ENV=%s', (nodeEnv) => {
+    expect(() => resolveDatabaseUrl({ NODE_ENV: nodeEnv })).toThrow(`DATABASE_URL absente (NODE_ENV=${nodeEnv})`);
+    expect(() => resolveDatabaseUrl({ NODE_ENV: nodeEnv, DATABASE_URL: '' })).toThrow(/DATABASE_URL absente/);
+  });
+
+  it('config.databaseUrl suit DATABASE_URL en test', () => {
+    expect(config.databaseUrl).toBe(resolveDatabaseUrl());
+  });
+});
+
+describe('réglages de l’API', () => {
+  it('limites par défaut', () => {
+    expect(config.apiRateLimit).toBe(300);
+    expect(config.apiMaxConnections).toBe(256);
+    expect(config.apiTrustProxy).toBe(false);
   });
 });

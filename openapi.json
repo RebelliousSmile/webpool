@@ -3,7 +3,7 @@
   "info": {
     "title": "webpool API",
     "version": "1.0.0",
-    "description": "API HTTP de webpool (`webpool serve`). Authentification par jeton `Authorization: Bearer`, créé avec `webpool client add`. Un client `read` voit les pools qui lui sont accordés (`webpool client grant`) et ceux des communautés dont il est membre ; les routes `/admin` sont réservées aux clients `admin`. Les pools sont gratuits ; une recherche (appel à un provider) se paie d'avance en giri, sur le portefeuille du client (crédité par un don) ou, pour les pools d'une communauté, sur son pot commun (alimenté par les apports de ses membres) : dans une communauté, on ne paie pas pour soi, et ne s'écrit que par `POST /requests`. Le reste de l'API ne fait que lire."
+    "description": "API HTTP de webpool (`webpool serve`). Authentification par jeton `Authorization: Bearer`, créé avec `webpool client add`. Un client `read` voit les pools qui lui sont accordés (`webpool client grant`) et ceux des communautés dont il est membre ; les routes `/admin` sont réservées aux clients `admin`. Les pools sont gratuits ; une recherche (appel à un provider) se paie d'avance en giri, sur le portefeuille du client (crédité par un don) ou, pour les pools d'une communauté, sur son pot commun (alimenté par les apports de ses membres) : dans une communauté, on ne paie pas pour soi, et ne s'écrit que par `POST /requests`. Le reste de l'API ne fait que lire. Limitation : WEBPOOL_API_RATE_LIMIT requêtes par minute par jeton (par IP sans jeton, hors vignettes `/media`), au-delà 429 `rate_limited` ; un octet NUL dans le chemin, les paramètres ou le corps donne 400."
   },
   "servers": [
     {
@@ -60,6 +60,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         },
         "security": []
@@ -81,6 +84,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         },
         "security": []
@@ -137,6 +143,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -168,6 +177,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -194,6 +206,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         },
         "description": "`definition` et `created_at` ne sont renvoyés qu'aux clients admin. Un pool non accordé répond 404.",
@@ -249,6 +264,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         },
         "description": "`id` et `score` ne sont renvoyés qu'aux clients admin.",
@@ -320,6 +338,9 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -346,6 +367,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -374,6 +398,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         },
         "parameters": [
@@ -446,6 +473,9 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         },
         "parameters": [
@@ -549,6 +579,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         },
         "parameters": [
@@ -593,6 +626,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -627,6 +663,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -674,6 +713,9 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         },
         "parameters": [
@@ -767,6 +809,9 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         },
         "parameters": [
@@ -843,6 +888,9 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         },
         "parameters": [
@@ -904,6 +952,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -967,6 +1018,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -1045,6 +1099,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       },
@@ -1087,7 +1144,14 @@
             "$ref": "#/components/responses/NotFound"
           },
           "429": {
-            "$ref": "#/components/responses/TooManyRequests"
+            "description": "Trop de recherches en attente (`too_many_queued`) ou trop de requêtes (`rate_limited`, en-tête Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "413": {
             "description": "Corps de plus de 8 Ko",
@@ -1169,6 +1233,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -1239,6 +1306,9 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -1286,6 +1356,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -1344,6 +1417,9 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       },
@@ -1402,6 +1478,9 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -1452,6 +1531,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       },
@@ -1500,6 +1582,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -1553,6 +1638,9 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -1639,6 +1727,24 @@
       },
       "TooManyRequests": {
         "description": "Trop de recherches en attente pour ce client (`too_many_queued`)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Trop de requêtes (`rate_limited`) : WEBPOOL_API_RATE_LIMIT par minute, par jeton, ou par IP sans jeton ; en-tête Retry-After",
+        "headers": {
+          "Retry-After": {
+            "schema": {
+              "type": "integer"
+            },
+            "description": "secondes avant de réessayer"
+          }
+        },
         "content": {
           "application/json": {
             "schema": {

@@ -180,8 +180,12 @@ du bloc, puis écriture, puis bloc suivant. La mémoire reste bornée et un bloc
 est conservé si un bloc suivant échoue. L'ingest, la classification et le refresh
 d'un pool écrivent chacun leur lot en quelques requêtes groupées.
 
-Les URL visitées viennent de l'extérieur : avant chaque requête, l'hôte est résolu
-et refusé (`error` : « hôte refusé ») si une de ses adresses n'est pas publique —
+Les URL visitées viennent de l'extérieur : l'hôte est jugé au moment même de la
+connexion (dispatcher undici dont la résolution DNS applique la garde : pas de
+DNS rebinding entre le contrôle et la connexion), pour la normalisation comme
+pour les médias. Seule l'unicast globale publique passe ; une IPv4 encapsulée
+(NAT64, 6to4, `::ffff:0:0/96`, `::/96`) est décodée et jugée. Concrètement, l'hôte
+est résolu et refusé (`error` : « hôte refusé ») si une de ses adresses n'est pas publique —
 loopback, plages privées, link-local et métadonnées cloud (`169.254.169.254`),
 CGNAT, IPv6 locales. Les redirections sont suivies une à une : chaque saut repasse
 ce contrôle et le délai par hôte, dans la limite de `WEBPOOL_MAX_REDIRECTS`
@@ -484,7 +488,9 @@ pnpm webpool media --retry-failed  # retente les échecs
 
 `webpool media` (aussi étape de `cycle`, sautée hors ligne) télécharge ces images
 avec les protections de la normalisation (hôtes publics seulement, délai par hôte,
-retries, taille bornée), refuse SVG et images de plus de 40 Mpx, réduit en WebP
+retries, taille bornée), n'accepte que jpeg, png, webp, gif et avif (heif/heic,
+tiff et svg refusés, seuls les décodeurs libvips de ces formats sont actifs) et
+des images de 40 Mpx au plus, réduit en WebP
 (vignette 480 px de large, favicon 64 px, métadonnées retirées) et range chaque
 fichier sous son empreinte dans `WEBPOOL_MEDIA_DIR`. Un `.ico` n'est accepté que
 s'il contient une image PNG. L'API sert ces fichiers sans jeton
@@ -553,9 +559,10 @@ pnpm webpool client revoke --name client-a
 | `/admin/requests` | admin | toutes les recherches payantes |
 
 Les erreurs sont en JSON (`{"error": {"code", "message"}}`) : 400 paramètre
-invalide, 401 jeton absent ou révoqué, 402 giri insuffisants, 403 route admin,
-404, 405, 413 corps de plus de 8 Ko, 415 corps autre que JSON, 429 trop de
-recherches en attente. Une erreur
+invalide (dont un octet NUL dans le chemin, les paramètres ou le corps), 401
+jeton absent ou révoqué, 402 giri insuffisants, 403 route admin, 404, 405, 413
+corps de plus de 8 Ko, 415 corps autre que JSON, 429 trop de recherches en
+attente ou trop de requêtes. Une erreur
 interne répond 500 sans détail ; le détail part dans le journal du serveur, qui
 trace une ligne par requête (méthode, chemin, statut, durée, client).
 
@@ -564,6 +571,9 @@ trace une ligne par requête (méthode, chemin, statut, durée, client).
 | `WEBPOOL_API_PORT` | `PORT`, sinon 3000 | port d'écoute (`--port`) |
 | `WEBPOOL_API_HOST` | `IP`, sinon 127.0.0.1 | adresse d'écoute (`--host`) |
 | `WEBPOOL_API_CORS_ORIGINS` | aucune | origines autorisées, séparées par des virgules (ex. l'URL de datapool) |
+| `WEBPOOL_API_RATE_LIMIT` | 300 | requêtes par minute et par jeton (par IP sans jeton), fenêtre glissante en mémoire ; `0` : aucune limite. Au-delà, 429 `rate_limited` et `Retry-After`. Les échecs d'authentification comptent par IP ; les vignettes `/media` ne sont pas limitées |
+| `WEBPOOL_API_MAX_CONNECTIONS` | 256 | connexions simultanées au plus ; requête coupée après 30 s, en-têtes incomplets après 15 s, connexion inactive fermée après 5 s |
+| `WEBPOOL_API_TRUST_PROXY` | non | `1` : IP du client lue dans la dernière entrée de `X-Forwarded-For`. À activer seulement derrière un proxy de confiance (alwaysdata : vérifier que l'en-tête est posé) ; sinon toutes les requêtes sans jeton partagent un compteur |
 
 L'API lit le corpus et n'écrit que les recherches payantes et les membres des
 communautés. Pour aller plus loin,
@@ -761,6 +771,11 @@ un processus séparé, que la mesure ne suit pas.
 La suite d'intégration utilise le PostgreSQL docker local dans un schéma jetable créé
 puis supprimé par fichier de test, remis à zéro entre les tests. Elle charge `.env` et
 calcule la même URL que le CLI (`DATABASE_URL`, sinon `localhost:${WEBPOOL_DB_PORT:-5432}`).
+
+`DATABASE_URL` est obligatoire hors développement : le conteneur local
+`postgres://webpool:webpool@localhost:${WEBPOOL_DB_PORT:-5432}/webpool` ne sert de
+défaut que si `NODE_ENV` est absent, `development` ou `test`. Sinon, la première
+commande qui ouvre la base s'arrête avec un message explicite.
 
 Sur un poste, elle est ignorée avec un avertissement si la base est injoignable.
 `WEBPOOL_IT_REQUIRED=1` la rend obligatoire : une base injoignable fait alors échouer

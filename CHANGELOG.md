@@ -52,6 +52,15 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions [Sem
 - Une variable `PORT` invalide n'arrête plus les commandes quand `WEBPOOL_API_PORT` est défini.
 - Erreurs de repli de provider et de connexion au déploiement : cause d'origine conservée (`cause`).
 
+### Security
+
+- Garde SSRF au moment de la connexion (dispatcher `undici` 7) : DNS rebinding fermé, pour la normalisation comme pour les médias. Seule l'unicast globale publique est acceptée ; IPv4 encapsulées (NAT64, 6to4, `::ffff:0:0/96`, `::/96`) décodées et jugées ; multicast, `240/4`, `198.18/15`, `192.0.0/24`, `fec0::/10` et plages de documentation refusés.
+- Export Markdown : `\` et `[ ] ( ) | * _ \` !` échappés, `& < >` en entités, URL du lien encodée.
+- API : 400 sur un octet NUL (et sur les erreurs PostgreSQL 22021/22P05) ; délais, plafond de connexions, limitation par jeton et par IP (429 `rate_limited`, hors vignettes `/media`) : `WEBPOOL_API_RATE_LIMIT`, `WEBPOOL_API_MAX_CONNECTIONS`, `WEBPOOL_API_TRUST_PROXY` ; en-têtes `Idempotent-Replayed` et `Retry-After` exposés par CORS.
+- Déploiement : mot de passe de la base par `PGPASSWORD`, jamais dans les arguments de `psql` ou `pg_dump`.
+- **Incompatible** : `DATABASE_URL` obligatoire hors développement et test.
+- Vignettes : heif (HEVC), tiff et svg refusés, seuls les décodeurs libvips des formats acceptés actifs ; notice LGPL de libvips (`THIRD_PARTY_NOTICES.md`).
+
 ## [v0.1.0] - 2026-10-30
 
 ### Added

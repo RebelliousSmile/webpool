@@ -11,7 +11,8 @@ d'injection de contenu (DNS rebinding, liens Markdown).
 - **Date**: 2026_10_31
 - **Scope**: webpool `ccr-936abb88-3jmekc` @ 0311572, datapool @ 1a1478e (recherches payantes), puis revus au regard des corrections a77ea0c (webpool) et 106a00a (datapool)
 - **Health**: good — aucun constat critique ouvert
-- **Findings**: 0 critical, 13 warning, 25 minor ouverts ; 4 fermés par les corrections de la revue du plan
+- **Findings**: 0 critical, 13 warning, 25 minor relevés, 4 autres fermés par les corrections de la revue du plan
+- **Suivi (2026-10-31)**: tous corrigés (webpool b9a1ac3 et la fusion `secu-audit` qui suit, datapool e7f6682), sauf deux points résiduels listés en fin de rapport
 
 Méthode : quatre audits parallèles (sécurité webpool ; code-quality et
 architecture webpool ; dependencies, performance et tests webpool ; datapool sur
@@ -31,7 +32,7 @@ constats « suspecté » sont marqués.
 | ✅ | code-quality | `src/billing/index.js` (`setMember`) | `community join` écrasait le plafond quand on changeait le rôle, et rétrogradait un propriétaire sans `--role` ; `--monthly 0` était refusé. | Upsert partiel (un champ absent garde sa valeur), `--monthly 0` et `none` acceptés ; même règle pour `PUT /communities/{slug}/members/{name}`. |
 | ✅ | code-quality | `db/migrations/009_billing.sql` | Supprimer un client ou une communauté effaçait le grand livre en cascade. | `ON DELETE RESTRICT` (migration 010). |
 
-### Ouverts
+### Relevés — tous corrigés depuis (voir *Suivi*)
 
 | Sev | Category | Location | Issue | Suggested fix | Effort |
 | --- | -------- | -------- | ----- | ------------- | ------ |
@@ -104,3 +105,18 @@ constats « suspecté » sont marqués.
   - CVE libvips (OSV refusé par le proxy) ;
   - providers réels (pas de clés) ;
   - `/proc` chez alwaysdata.
+
+## Suivi des corrections (2026-10-31)
+
+Tous les constats ouverts ci-dessus sont corrigés, avec leurs tests :
+
+- **webpool, recherches et architecture** (b9a1ac3) : reprise du post-traitement (`processed_at`), `src/pipeline/` partagé, réservation des lignes de `normalize` et `classify` et verrou dans les commandes manuelles, `in_pool` à la lecture, `include_requests` en deux parties (au-delà de `limit`, semi-jointure), index du grand livre, `GET /billing` en lecture seule et en une requête, idempotence (`Idempotency-Key`), verrous consultatifs (rôle PostgreSQL minimal testé), erreurs génériques pour les clients, annulation par l'admin, 23505 en erreur métier, recherches orphelines closes aussitôt, coût d'un appel non enregistré compté, invitations et plafond par défaut, tests isolés, concurrents et CLI, vitest 5, vite 8, override `minimatch`.
+- **webpool, sécurité** (fusion `secu-audit`) : garde SSRF à la connexion (undici), unicast global seul, échappement Markdown, octet NUL en 400, délais, plafond de connexions et limitation de débit (hors `/media`), `PGPASSWORD` au déploiement, `DATABASE_URL` obligatoire hors développement, décodeurs d'images restreints et notice LGPL.
+- **datapool** (e7f6682) : achat gardé et idempotent, erreur de rechargement en ligne, annulation sans double envoi, soldes relus sur 402/429, déconnexion sur 401 et délai de 15 s, mobile (Annuler visible, ombre de navigation, `?pool=` inconnu), `/pools` chargé une fois et historique gardé pendant le rechargement, logique d'achat extraite et testée (`purchase.svelte.ts`), HSTS et `Permissions-Policy`, `style-src 'self'` avec `style-src-attr 'unsafe-inline'`, composant `<Async>`, mouvements du portefeuille, filtre de statut, vue admin, invitations.
+
+Résiduels assumés :
+
+- `deepmerge` 4.3.1 (datapool, via `@sveltejs/vite-plugin-svelte`, développement seulement) : aucune version corrigée publiée.
+- `style-src-attr 'unsafe-inline'` (datapool) : requis par l'annonceur de navigation de SvelteKit, seul attribut `style` restant ; les `<style>` en ligne sont interdits.
+- Un propriétaire peut savoir si un nom de client existe (404 sur un nom inconnu) : les noms ne sont pas des secrets, et l'inscription exige désormais le consentement du client.
+- À vérifier en production : qu'alwaysdata pose `X-Forwarded-For`, puis activer `WEBPOOL_API_TRUST_PROXY`, sans quoi les requêtes sans jeton partagent un compteur (les vignettes `/media` en sont exemptes). Exploitation réelle du DNS rebinding et accès IPv6 non testables dans le bac à sable ; Node 24 non testé localement (la CI le couvre).

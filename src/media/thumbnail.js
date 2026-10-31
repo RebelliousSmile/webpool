@@ -1,12 +1,38 @@
 import crypto from 'node:crypto';
 import sharp from 'sharp';
 
-// Réduction d'images non fiables en WebP. Seuls les formats raster connus
-// passent ; le SVG (scriptable, rendu par une autre bibliothèque) est refusé,
-// comme toute image de plus de MAX_PIXELS (bombe de décompression).
+// Réduction d'images non fiables en WebP. Seuls jpeg, png, webp, gif et avif
+// passent ; heif (HEVC), tiff et svg (scriptable, rendu par une autre
+// bibliothèque) sont refusés, comme toute image de plus de MAX_PIXELS (bombe de
+// décompression).
 
 export const MAX_PIXELS = 40_000_000;
-const RASTER = new Set(['jpeg', 'png', 'webp', 'gif', 'avif', 'tiff', 'heif']);
+export const ACCEPTED_FORMATS = ['jpeg', 'png', 'webp', 'gif', 'avif'];
+
+// Défense en profondeur : libvips ne garde que les décodeurs de ces formats
+// (AVIF passe par celui de libheif). Tiff, svg, pdf, magick, jp2k, jxl… ne
+// sont jamais appelés, même sur une image qui tromperait la détection.
+// Réglage global du processus : sharp ne sert qu'ici.
+sharp.block({ operation: ['VipsForeignLoad'] });
+sharp.unblock({
+  operation: ['VipsForeignLoadJpeg', 'VipsForeignLoadPng', 'VipsForeignLoadWebp', 'VipsForeignLoadNsgif', 'VipsForeignLoadHeif'],
+});
+
+// Format retenu : sharp nomme `heif` un AVIF ; seul l'AV1 compte comme avif.
+export function acceptedFormat(meta) {
+  const format = meta.format === 'heif' && meta.compression === 'av1' ? 'avif' : meta.format;
+  return ACCEPTED_FORMATS.includes(format) ? format : null;
+}
+
+// Nom d'un format refusé que libvips ne lit plus (décodeur bloqué), pour un
+// message utile ; null si inconnu.
+export function sniffRefusedFormat(buffer) {
+  const head = buffer.subarray(0, 512).toString('latin1');
+  if (/^(II\*\0|MM\0\*)/.test(head)) return 'tiff';
+  if (/^\s*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!DOCTYPE svg[^>]*>\s*)?<svg[\s>]/i.test(head)) return 'svg';
+  if (/^%PDF-/.test(head)) return 'pdf';
+  return null;
+}
 export const THUMB_WIDTH = 480;
 export const FAVICON_SIZE = 64;
 
@@ -43,9 +69,10 @@ async function decode(buffer) {
     // et le décodage reste plafonné par limitInputPixels.
     meta = await sharp(input, { limitInputPixels: false }).metadata();
   } catch {
-    throw new ImageRefusedError('image illisible');
+    const refused = sniffRefusedFormat(input);
+    throw new ImageRefusedError(refused ? `format refusé : ${refused}` : 'image illisible');
   }
-  if (!RASTER.has(meta.format)) throw new ImageRefusedError(`format refusé : ${meta.format}`);
+  if (!acceptedFormat(meta)) throw new ImageRefusedError(`format refusé : ${meta.format}`);
   if ((meta.width ?? 0) * (meta.height ?? 0) > MAX_PIXELS) throw new ImageRefusedError('image trop grande');
   return input;
 }
