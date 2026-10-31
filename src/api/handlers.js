@@ -1,4 +1,9 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { config } from '../config.js';
 import { query } from '../db.js';
+import { MEDIA_FILE_RE, mediaUrl } from '../media/files.js';
+import { mediaOf, sourceOf } from '../media/kinds.js';
 import { stats } from '../stats.js';
 import { USAGE_VALUES } from '../domains/index.js';
 import { QUERY_STATUSES, listQueries } from '../explore/index.js';
@@ -30,6 +35,22 @@ const URL_ORDERS = {
 const TOP_DOMAINS = 20;
 
 const iso = (d) => (d ? new Date(d).toISOString() : null);
+
+// Médias d'un lien : vignette en cache (aperçu de la page d'abord, puis celle du
+// provider), favicon du domaine, type et famille de source. Le type d'une URL
+// normalisée avant la phase 3 se déduit de son URL.
+const THUMB_SQL = `(SELECT m.file FROM url_media m
+                     WHERE m.url_item_id = ui.id AND m.status = 'cached'
+                     ORDER BY m.kind = 'og' DESC LIMIT 1) AS thumb_file`;
+const FAVICON_SQL = `(SELECT f.favicon_file FROM domain_profile f
+                       WHERE f.domain = ui.domain AND f.favicon_status = 'cached') AS favicon_file`;
+const mediaFields = (r, url) => ({
+  description: r.description ?? null,
+  media_type: r.media_type ?? mediaOf(url),
+  source: sourceOf(r.domain),
+  thumbnail: mediaUrl(r.thumb_file),
+  favicon: mediaUrl(r.favicon_file),
+});
 const isAdmin = (client) => client.scope === 'admin';
 
 // Page d'une requête filtrée : les fragments SQL sont des constantes du module,
@@ -119,7 +140,8 @@ export async function listPoolItems({ client, params, query: qs }) {
   const pool = await visiblePool(client, params.slug);
   const page = pageParams(qs);
   const { rows, total } = await selectPage({
-    select: `pi.rank, pi.score, ui.id, ui.canonical_url, ui.domain, ui.title, dp.usage_commercial`,
+    select: `pi.rank, pi.score, ui.id, ui.canonical_url, ui.domain, ui.title, dp.usage_commercial,
+             ui.description, ui.media_type, ${THUMB_SQL}, ${FAVICON_SQL}`,
     from: `pool_item pi
            JOIN url_item ui ON ui.id = pi.url_item_id
            LEFT JOIN domain_profile dp ON dp.domain = ui.domain`,
@@ -135,6 +157,7 @@ export async function listPoolItems({ client, params, query: qs }) {
       domain: r.domain,
       title: r.title,
       usage_commercial: r.usage_commercial,
+      ...mediaFields(r, r.canonical_url),
     };
     return isAdmin(client) ? { ...item, id: num(r.id), score: num(r.score) } : item;
   });
@@ -162,7 +185,7 @@ export async function exportPool({ params, query: qs }) {
 // --- Administration : corpus, taxonomie, domaines, frontière, runs.
 
 export async function adminStats() {
-  const [base, { rows: pools }, { rows: domains }, { rows: queries }] = await Promise.all([
+  const [base, { rows: pools }, { rows: domains }, { rows: queries }, { rows: media }] = await Promise.all([
     stats(),
     query('SELECT count(*)::int AS n FROM pool'),
     query(
@@ -172,8 +195,15 @@ export async function adminStats() {
          FROM domain_profile`,
     ),
     query('SELECT status, count(*)::int AS n FROM search_query GROUP BY status ORDER BY status'),
+    query(
+      `SELECT 'thumbs' AS what, status, count(*)::int AS n FROM url_media GROUP BY status
+       UNION ALL
+       SELECT 'favicons', favicon_status, count(*)::int FROM domain_profile WHERE favicon_status IS NOT NULL GROUP BY favicon_status`,
+    ),
   ]);
-  return { body: { ...base, pools: pools[0].n, domain_profile: domains[0], search_query: queries } };
+  const mediaStats = { thumbs: { pending: 0, cached: 0, failed: 0 }, favicons: { pending: 0, cached: 0, failed: 0 } };
+  for (const m of media) mediaStats[m.what][m.status] = m.n;
+  return { body: { ...base, pools: pools[0].n, domain_profile: domains[0], search_query: queries, media: mediaStats } };
 }
 
 export async function listUrls({ query: qs }) {
@@ -211,20 +241,22 @@ export async function listUrls({ query: qs }) {
     select: `ui.id, coalesce(ui.canonical_url, ui.raw_url) AS url, ui.domain, ui.title, ui.status,
              ui.relevance_score, ui.quality_score, ui.confidence_score, ui.first_seen_at,
              (SELECT t.slug FROM url_theme ut JOIN theme t ON t.id = ut.theme_id
-               WHERE ut.url_item_id = ui.id AND ut.is_primary) AS primary_theme`,
+               WHERE ut.url_item_id = ui.id AND ut.is_primary) AS primary_theme,
+             ui.description, ui.media_type, ${THUMB_SQL}, ${FAVICON_SQL}`,
     from: 'url_item ui',
     where,
     values,
     order: URL_ORDERS[order],
     page,
   });
-  const items = rows.map((r) => ({
+  const items = rows.map(({ thumb_file, favicon_file, ...r }) => ({
     ...r,
     id: num(r.id),
     relevance_score: num(r.relevance_score),
     quality_score: num(r.quality_score),
     confidence_score: num(r.confidence_score),
     first_seen_at: iso(r.first_seen_at),
+    ...mediaFields({ ...r, thumb_file, favicon_file }, r.url),
   }));
   return { body: paged(items, total, page) };
 }
@@ -234,13 +266,14 @@ export async function getUrl({ params }) {
   const { rows } = await query(
     `SELECT ui.id, ui.raw_url, ui.canonical_url, ui.domain, ui.title, ui.http_status, ui.status,
             ui.duplicate_of, ui.error, ui.relevance_score, ui.confidence_score, ui.quality_score,
-            ui.first_seen_at, ui.normalized_at, ui.classified_at, dp.usage_commercial
+            ui.first_seen_at, ui.normalized_at, ui.classified_at, dp.usage_commercial,
+            ui.description, ui.media_type, ui.lang, ui.site_name, ${THUMB_SQL}, ${FAVICON_SQL}
        FROM url_item ui LEFT JOIN domain_profile dp ON dp.domain = ui.domain
       WHERE ui.id = $1`,
     [id],
   );
   if (rows.length === 0) throw notFound(`URL inconnue : ${id}`);
-  const r = rows[0];
+  const { thumb_file, favicon_file, ...r } = rows[0];
   const [{ rows: sources }, { rows: themes }, { rows: facets }, { rows: pools }] = await Promise.all([
     query(
       `SELECT provider, query, serp_rank, discovered_at FROM url_source
@@ -276,6 +309,7 @@ export async function getUrl({ params }) {
       first_seen_at: iso(r.first_seen_at),
       normalized_at: iso(r.normalized_at),
       classified_at: iso(r.classified_at),
+      ...mediaFields({ ...r, thumb_file, favicon_file }, r.canonical_url ?? r.raw_url),
       sources: sources.map((s) => ({ ...s, discovered_at: iso(s.discovered_at) })),
       themes: themes.map((t) => ({ ...t, score: num(t.score) })),
       facets,
@@ -397,4 +431,23 @@ export async function listRuns({ query: qs }) {
     finished_at: iso(r.finished_at),
   }));
   return { body: paged(items, total, page) };
+}
+
+// Fichier du cache de médias : public (une balise <img> n'envoie pas de jeton),
+// immuable (nommé par son empreinte). Seul un nom d'empreinte est accepté :
+// aucun autre chemin n'est lisible, et rien n'est jamais téléchargé ici.
+export async function getMedia({ params }) {
+  if (!MEDIA_FILE_RE.test(params.file)) throw notFound();
+  let data;
+  try {
+    data = await fs.readFile(path.join(config.mediaDir, params.file));
+  } catch (err) {
+    if (err.code === 'ENOENT') throw notFound();
+    throw err;
+  }
+  return {
+    raw: data,
+    contentType: 'image/webp',
+    headers: { 'Cache-Control': 'public, max-age=31536000, immutable' },
+  };
 }

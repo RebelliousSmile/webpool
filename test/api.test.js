@@ -91,7 +91,7 @@ describe('openapi.json', () => {
     expect(documented.sort()).toEqual(routes.map((r) => r.path).sort());
     const publicPaths = Object.entries(doc.paths)
       .filter(([, v]) => Array.isArray(v.get.security) && v.get.security.length === 0)
-      .map(([p]) => `/api/v1${p}`);
+      .map(([p]) => `/api/v1${p.replace(/\{(\w+)\}/g, ':$1')}`);
     expect(publicPaths.sort()).toEqual(routes.filter((r) => !r.scope).map((r) => r.path).sort());
   });
 });

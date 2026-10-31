@@ -12,6 +12,8 @@ export function buildUrl(query, key, limit = 20, page = 0) {
   url.searchParams.set('per_page', String(Math.min(limit, 100)));
   url.searchParams.set('format', 'json');
   url.searchParams.set('nojsoncallback', '1');
+  // url_w : vignette de 400 px servie par Flickr (repli quand la page n'en déclare pas)
+  url.searchParams.set('extras', 'url_w');
   if (page > 0) url.searchParams.set('page', String(page + 1));
   return url;
 }
@@ -25,6 +27,7 @@ export function mapResponse(data) {
     url: `https://www.flickr.com/photos/${p.owner}/${p.id}`,
     rank: i + 1,
     title: p.title?.trim() ? p.title : null,
+    thumbnail: typeof p.url_w === 'string' ? p.url_w : null,
   }));
 }
 

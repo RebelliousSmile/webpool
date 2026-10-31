@@ -3,7 +3,8 @@ import { query, withTransaction } from '../db.js';
 import { withRun } from '../run.js';
 import { registerDomains } from '../domains/index.js';
 import { createFetcher, mapLimit, HttpError } from './fetcher.js';
-import { canonicalizeUrl, domainOf, extractCanonicalLink, extractTitle } from './normalizer.js';
+import { canonicalizeUrl, domainOf, extractCanonicalLink, extractMeta, extractTitle } from './normalizer.js';
+import { mediaOf } from '../media/kinds.js';
 
 // Une page ne peut revendiquer que l'URL de son propre domaine (hôte exact,
 // `www.` retiré) : sinon elle provoquerait la fusion d'URL d'un autre site.
@@ -24,20 +25,27 @@ async function normalizeOne(item, runId, page) {
   let httpStatus = null;
   let title = item.title;
   let declaredCanonical = null;
+  let meta = {};
+  let contentType = null;
 
   if (page) {
     // US-07 : une réponse 3xx (sans location), 4xx ou 5xx n'est pas une page exploitable.
     if (page.httpStatus >= 300) throw new HttpError(page.httpStatus);
     finalUrl = page.finalUrl || item.raw_url;
     httpStatus = page.httpStatus;
+    contentType = page.contentType ?? null;
     if (page.html) {
-      title = extractTitle(page.html) ?? title;
+      meta = extractMeta(page.html, finalUrl);
+      title = extractTitle(page.html) ?? meta.title ?? title;
       declaredCanonical = sameDomainCanonical(extractCanonicalLink(page.html, finalUrl), finalUrl);
     }
   }
 
   const canonical = canonicalizeUrl(declaredCanonical ?? finalUrl);
   const domain = domainOf(canonical);
+  const mediaType = mediaOf(canonical, { contentType, ogType: meta.ogType });
+  // Aperçu : l'image déclarée par la page, ou la ressource elle-même si c'en est une.
+  const preview = meta.image ?? (page && mediaType === 'image' && /^image\//i.test(contentType ?? '') ? finalUrl : null);
 
   return withTransaction(async (client) => {
     // Une redirection peut mener à un domaine que l'ingestion n'a pas vu.
@@ -61,6 +69,14 @@ async function normalizeOne(item, runId, page) {
         survivorId,
         item.id,
       ]);
+      // Les vignettes candidates aussi, sauf celles que la survivante a déjà.
+      await client.query(
+        `UPDATE url_media m SET url_item_id = $1
+          WHERE m.url_item_id = $2
+            AND NOT EXISTS (SELECT 1 FROM url_media s WHERE s.url_item_id = $1 AND s.kind = m.kind)`,
+        [survivorId, item.id],
+      );
+      await client.query('DELETE FROM url_media WHERE url_item_id = $1', [item.id]);
       await client.query(
         `UPDATE url_item
             SET status = 'duplicate', duplicate_of = $2, canonical_url = $3, domain = $4,
@@ -74,10 +90,30 @@ async function normalizeOne(item, runId, page) {
     await client.query(
       `UPDATE url_item
           SET status = 'normalized', canonical_url = $2, domain = $3, title = $4,
-              http_status = $5, error = NULL, normalized_at = now(), normalize_run_id = $6
+              http_status = $5, error = NULL, normalized_at = now(), normalize_run_id = $6,
+              description = coalesce($7, description), media_type = $8,
+              lang = coalesce($9, lang), site_name = coalesce($10, site_name)
         WHERE id = $1`,
-      [item.id, canonical, domain, title, httpStatus, runId],
+      [item.id, canonical, domain, title, httpStatus, runId, meta.description ?? null, mediaType, meta.lang ?? null, meta.siteName ?? null],
     );
+    // Une nouvelle source d'aperçu relance le téléchargement ; la même ne change rien.
+    if (preview) {
+      await client.query(
+        `INSERT INTO url_media (url_item_id, kind, source_url) VALUES ($1, 'og', $2)
+         ON CONFLICT (url_item_id, kind) DO UPDATE
+           SET source_url = EXCLUDED.source_url, status = 'pending', file = NULL, error = NULL
+         WHERE url_media.source_url <> EXCLUDED.source_url`,
+        [item.id, preview],
+      );
+    }
+    // Favicon : la première source connue d'un domaine fait foi.
+    if (meta.icon) {
+      await client.query(
+        `UPDATE domain_profile SET favicon_source = $2, favicon_status = 'pending'
+          WHERE domain = $1 AND favicon_source IS NULL`,
+        [domain, meta.icon],
+      );
+    }
     return 'normalized';
   });
 }

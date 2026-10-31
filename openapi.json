@@ -76,6 +76,38 @@
         "security": []
       }
     },
+    "/media/{file}": {
+      "get": {
+        "summary": "Vignette ou favicon du cache (public, immuable)",
+        "tags": [
+          "public"
+        ],
+        "security": [],
+        "description": "Fichier nommé par son empreinte, servi depuis le cache de `webpool media` avec `Cache-Control: public, max-age=31536000, immutable`. Les chemins viennent des champs `thumbnail` et `favicon`.",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}\\.webp$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Image WebP",
+            "content": {
+              "image/webp": {}
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
     "/me": {
       "get": {
         "summary": "Client authentifié",
@@ -1028,10 +1060,15 @@
       "PoolItem": {
         "type": "object",
         "required": [
-          "rank",
-          "url",
+          "description",
           "domain",
+          "favicon",
+          "media_type",
+          "rank",
+          "source",
+          "thumbnail",
           "title",
+          "url",
           "usage_commercial"
         ],
         "properties": {
@@ -1073,6 +1110,53 @@
               "null"
             ],
             "description": "admin uniquement"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Description de la page (og:description ou meta description)"
+          },
+          "media_type": {
+            "type": "string",
+            "enum": [
+              "page",
+              "image",
+              "video",
+              "pdf",
+              "data",
+              "code",
+              "model"
+            ],
+            "description": "Type de média : fixé à la normalisation (Content-Type, og:type, URL), déduit de l'URL pour les liens plus anciens"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "research",
+              "archives",
+              "stock",
+              "community",
+              "video",
+              "press",
+              "other"
+            ],
+            "description": "Famille de source, d'après le domaine"
+          },
+          "thumbnail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Chemin de la vignette en cache (WebP, 480 px de large au plus), à résoudre contre l'origine de l'API ; null si aucune"
+          },
+          "favicon": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Chemin du favicon du domaine en cache (WebP 64 px) ; null si aucun"
           }
         }
       },
@@ -1140,6 +1224,40 @@
                 }
               }
             }
+          },
+          "media": {
+            "type": "object",
+            "description": "Vignettes et favicons par statut",
+            "properties": {
+              "thumbs": {
+                "type": "object",
+                "properties": {
+                  "pending": {
+                    "type": "integer"
+                  },
+                  "cached": {
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "favicons": {
+                "type": "object",
+                "properties": {
+                  "pending": {
+                    "type": "integer"
+                  },
+                  "cached": {
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -1197,6 +1315,53 @@
               "string",
               "null"
             ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Description de la page (og:description ou meta description)"
+          },
+          "media_type": {
+            "type": "string",
+            "enum": [
+              "page",
+              "image",
+              "video",
+              "pdf",
+              "data",
+              "code",
+              "model"
+            ],
+            "description": "Type de média : fixé à la normalisation (Content-Type, og:type, URL), déduit de l'URL pour les liens plus anciens"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "research",
+              "archives",
+              "stock",
+              "community",
+              "video",
+              "press",
+              "other"
+            ],
+            "description": "Famille de source, d'après le domaine"
+          },
+          "thumbnail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Chemin de la vignette en cache (WebP, 480 px de large au plus), à résoudre contre l'origine de l'API ; null si aucune"
+          },
+          "favicon": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Chemin du favicon du domaine en cache (WebP 64 px) ; null si aucun"
           }
         }
       },
@@ -1386,6 +1551,65 @@
                 }
               }
             }
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Description de la page (og:description ou meta description)"
+          },
+          "media_type": {
+            "type": "string",
+            "enum": [
+              "page",
+              "image",
+              "video",
+              "pdf",
+              "data",
+              "code",
+              "model"
+            ],
+            "description": "Type de média : fixé à la normalisation (Content-Type, og:type, URL), déduit de l'URL pour les liens plus anciens"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "research",
+              "archives",
+              "stock",
+              "community",
+              "video",
+              "press",
+              "other"
+            ],
+            "description": "Famille de source, d'après le domaine"
+          },
+          "thumbnail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Chemin de la vignette en cache (WebP, 480 px de large au plus), à résoudre contre l'origine de l'API ; null si aucune"
+          },
+          "favicon": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Chemin du favicon du domaine en cache (WebP 64 px) ; null si aucun"
+          },
+          "lang": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "site_name": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

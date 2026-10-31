@@ -7,6 +7,7 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions [Sem
 
 ### Added
 
+- Médias des liens : description, type de média, langue et nom du site lus à la normalisation ; vignettes (aperçu de la page, sinon vignette du provider) et favicons mis en cache en WebP par `webpool media` (étape de `cycle`) ; champs `description`, `media_type`, `source`, `thumbnail`, `favicon` dans l'API, fichiers servis par `/api/v1/media/{empreinte}.webp` ; migration `008_url_media`, dépendance `sharp`.
 - API HTTP en lecture seule : `webpool serve`, routes `/api/v1` (pools, corpus, taxonomie, domaines, frontière, runs, export), contrat `openapi.json`.
 - ESLint (`pnpm lint`) et couverture des deux suites réunies (`pnpm test:coverage`, planchers), exécutés par la CI.
 - Clients de l'API par jeton (`webpool client add|list|revoke|grant|ungrant`), migration `005_api_client` : scope `admin` ou `read` limité aux pools accordés.

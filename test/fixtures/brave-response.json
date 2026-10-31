@@ -1,4 +1,4 @@
 { "type": "search", "web": { "results": [
-  { "title": "Forest LoRA — Civitai", "url": "https://civitai.com/models/1", "description": "…" },
+  { "title": "Forest LoRA — Civitai", "url": "https://civitai.com/models/1", "description": "…", "thumbnail": { "src": "https://imgs.search.brave.com/abc.jpg" } },
   { "url": "https://example.com/no-title" }
 ] } }

@@ -21,6 +21,7 @@ export function mapResponse(data) {
       url: `https://www.europeana.eu/item${item.id}`,
       rank: i + 1,
       title: Array.isArray(item.title) ? (item.title[0] ?? null) : (item.title ?? null),
+      thumbnail: (Array.isArray(item.edmPreview) ? item.edmPreview[0] : item.edmPreview) ?? null,
     }));
 }
 

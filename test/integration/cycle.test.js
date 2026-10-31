@@ -57,9 +57,11 @@ describe.skipIf(!available)('cycle sur PostgreSQL', () => {
       ['explore', true],
       ['normalize', true],
       ['classify', true],
+      ['media', true],
       ['pools', true],
     ]);
-    const [exp, norm, cls, pl] = res.steps;
+    expect(res.steps.find((st) => st.name === 'media').line).toBe('sautée (hors ligne)');
+    const [exp, norm, cls, , pl] = res.steps;
     expect(exp.result.newUrls).toBe(150);
     expect(exp.result.errors).toBe(1);
     expect(exp.line).toContain(`#${broken.id} en échec`);
@@ -86,9 +88,10 @@ describe.skipIf(!available)('cycle sur PostgreSQL', () => {
       ['explore', false],
       ['normalize', true],
       ['classify', true],
+      ['media', true],
       ['pools', true],
     ]);
-    expect(res.steps[3].line).toBe('aucun pool');
+    expect(res.steps.find((st) => st.name === 'pools').line).toBe('aucun pool');
   });
 
   it("exemple japon : les requêtes s'importent avec leurs tags, les pools se créent", async () => {

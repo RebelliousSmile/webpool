@@ -55,6 +55,43 @@ export async function readHead(res, maxBytes) {
   return text.slice(0, end ? end.index + end[0].length : maxBytes);
 }
 
+// Lecture par défaut : le <head> d'une page HTML ; pour un autre type, rien
+// (le Content-Type suffit à classer la ressource).
+async function readPage(res, maxBytes) {
+  const contentType = res.headers.get('content-type') ?? '';
+  const isHtml = contentType.includes('text/html');
+  const html = isHtml ? await readHead(res, maxBytes) : '';
+  if (!isHtml) await res.body?.cancel?.().catch(() => {});
+  return { html, contentType };
+}
+
+// Corps entier en octets, refusé au-delà de `maxBytes` (vignettes, favicons).
+export async function readBytes(res, maxBytes) {
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await res.body?.cancel?.().catch(() => {});
+    throw Object.assign(new Error(`trop volumineux : ${declared} octets (max ${maxBytes})`), { retryable: false });
+  }
+  const reader = res.body?.getReader?.();
+  if (!reader) return Buffer.from(await res.arrayBuffer());
+  const chunks = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        throw Object.assign(new Error(`trop volumineux : plus de ${maxBytes} octets`), { retryable: false });
+      }
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks);
+}
+
 export function createFetcher({
   perHostDelayMs = config.hostDelayMs,
   retries = config.fetchRetries,
@@ -67,6 +104,9 @@ export function createFetcher({
   lookup,
   sleep = sleepReal,
   now = Date.now,
+  // (res, maxBodyBytes) → objet fusionné dans le résultat ; `accept` : en-tête Accept
+  read = readPage,
+  accept = 'text/html,*/*;q=0.8',
 } = {}) {
   const nextSlot = new Map();
 
@@ -89,7 +129,7 @@ export function createFetcher({
       await throttle(host);
       const res = await fetchImpl(url, {
         redirect: 'manual',
-        headers: { 'User-Agent': config.userAgent, Accept: 'text/html,*/*;q=0.8' },
+        headers: { 'User-Agent': config.userAgent, Accept: accept },
         signal: AbortSignal.timeout(timeoutMs),
       });
       const location = REDIRECT_STATUSES.has(res.status) ? res.headers.get('location') : null;
@@ -120,11 +160,11 @@ export function createFetcher({
         await sleep(wait);
         continue;
       }
-      const contentType = res.headers.get('content-type') ?? '';
-      const isHtml = contentType.includes('text/html');
-      const html = isHtml ? await readHead(res, maxBodyBytes) : '';
-      if (!isHtml) await res.body?.cancel?.().catch(() => {});
-      return { finalUrl: url, httpStatus: res.status, html };
+      if (res.status >= 300) {
+        await res.body?.cancel?.().catch(() => {});
+        return { finalUrl: url, httpStatus: res.status, html: '', contentType: res.headers.get('content-type') ?? '' };
+      }
+      return { finalUrl: url, httpStatus: res.status, ...(await read(res, maxBodyBytes)) };
     }
   };
 }
