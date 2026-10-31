@@ -1,6 +1,6 @@
 ---
 objective: "L'exploration se concentre sur un tuyau (un sujet), passe au suivant dès que sa pression en domaines nouveaux bien notés baisse, et revient au premier après le dernier, sans jamais s'arrêter."
-status: in-progress
+status: implemented
 ---
 
 <!-- Fill or omit these sections; never add, rename, or reorder one. -->
