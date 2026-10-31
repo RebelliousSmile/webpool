@@ -44,7 +44,7 @@ describe.skipIf(!available)('CLI : communautés, portefeuilles, recherches', () 
   it('communauté : création, membres, plafond, liste', async () => {
     expect((await cli('community', 'add', '--slug', 'atelier', '--label', 'Atelier')).out).toContain('Communauté "atelier" créée');
     expect((await cli('community', 'join', '--slug', 'atelier', '--name', 'alice', '--role', 'owner')).out)
-      .toContain('"alice" membre (owner) de "atelier", sans plafond');
+      .toContain('"alice" membre fondateur de "atelier", sans plafond');
     expect((await cli('community', 'join', '--slug', 'atelier', '--name', 'bob', '--monthly', '0')).out)
       .toContain('plafond 0 giri / 30 jours');
     expect((await cli('community', 'join', '--slug', 'atelier', '--name', 'bob', '--monthly', 'none')).out).toContain('sans plafond');

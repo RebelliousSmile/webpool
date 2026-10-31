@@ -355,12 +355,20 @@ entière du grand livre (1 € = `WEBPOOL_GIRI_PER_EUR` giri, 1 000 par défaut)
 - Dans une **communauté**, on ne paie pas pour soi : les membres versent des giri
   au **pot commun** (apport à leur nom), et les recherches sur les pools de la
   communauté se paient sur ce pot, jamais sur un portefeuille personnel. Les
-  membres voient ces pools sans accord individuel. Les propriétaires invitent des
-  clients et règlent rôles et plafonds depuis l'API (datapool) : un invité n'entre
-  qu'en acceptant, et peut ensuite quitter la communauté. L'admin, lui, rattache
-  directement (`community join`). Un nouveau membre sans plafond explicite reçoit
-  `WEBPOOL_MEMBER_DEFAULT_LIMIT` giri sur 30 jours (1 000 par défaut ; aucun pour
-  un propriétaire).
+  membres voient ces pools sans accord individuel.
+- Le **propriétaire** d'une communauté est le membre qui a **versé le plus de giri
+  au pot** (total de ses apports) ; ex æquo, tous les premiers le sont. Le rôle se
+  calcule, il ne se donne pas : il change de mains quand un autre membre dépasse le
+  premier. Tant que personne n'a versé, c'est le fondateur désigné par l'admin
+  (`community join --role owner`). Seuls comptent les membres actifs (invitation
+  acceptée, jeton non révoqué). Le propriétaire invite des clients, règle les
+  plafonds, retire des membres (pas un autre propriétaire), voit le grand livre
+  du pot et toutes les recherches ; il n'a pas de plafond. Un invité n'entre qu'en
+  acceptant, et peut ensuite quitter la communauté ; un propriétaire qui part
+  passe la main au plus gros apport suivant, mais ne peut pas laisser des membres
+  sans propriétaire. L'admin, lui, rattache directement (`community join`). Un
+  nouveau membre sans plafond explicite reçoit `WEBPOOL_MEMBER_DEFAULT_LIMIT` giri
+  sur 30 jours (1 000 par défaut).
 - Un **pool public** (`pool publish`) est visible et exportable par tout client,
   sans accord : c'est l'accès gratuit par défaut. Un accès reste un jeton créé par
   l'admin (`client add`) ; il n'y a pas d'inscription en libre-service.
@@ -368,7 +376,7 @@ entière du grand livre (1 € = `WEBPOOL_GIRI_PER_EUR` giri, 1 000 par défaut)
 ```bash
 # Communauté, membres (plafond en giri sur 30 jours glissants), pools rattachés
 pnpm webpool community add --slug atelier --label "Atelier photo"
-pnpm webpool community join --slug atelier --name alice --role owner
+pnpm webpool community join --slug atelier --name alice --role owner   # fondatrice : propriétaire tant que personne n'a versé
 pnpm webpool community join --slug atelier --name bob --monthly 2000
 pnpm webpool community attach --slug atelier --pool nagasaki
 
@@ -548,7 +556,7 @@ pnpm webpool client revoke --name client-a
 | `GET /requests?community=&status=` | read | recherches du client, ou de la communauté pour ses propriétaires |
 | `POST /requests` | read | achète une recherche (`{query, provider, pages, pool, community}`), 201 |
 | `DELETE /requests/{id}` | read | annule une recherche en attente, remboursée |
-| `GET /communities/{slug}/members`, `PUT`/`DELETE …/members/{name}` | read (propriétaires) | membres (rôle, plafond, dépense, apports, invitation acceptée) ; invitation, changement de rôle ou de plafond, retrait ; la communauté garde un propriétaire actif |
+| `GET /communities/{slug}/members`, `PUT`/`DELETE …/members/{name}` | read (propriétaires) | membres du plus gros apport au plus petit (rôle calculé, fondateur, plafond, dépense, apports, invitation acceptée) ; invitation, plafond, retrait d'un membre ; le rôle ne se donne pas |
 | `POST`/`DELETE /communities/{slug}/invitation`, `DELETE /communities/{slug}/membership` | read | accepter ou décliner une invitation (listées dans `/billing`), quitter une communauté |
 | `/admin/stats` | admin | volumes pour un tableau de bord |
 | `/admin/pools/{slug}/export?format=json\|csv\|md\|txt` | admin | export de `pool export`, définition et scores compris |

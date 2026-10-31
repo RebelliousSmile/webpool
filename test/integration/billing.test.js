@@ -144,39 +144,73 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
       expect((await call('GET', '/billing', who.dave)).body.communities.map((c) => c.slug)).toEqual(['atelier']);
     });
 
-    it('décliner une invitation la supprime ; quitter une communauté ; le dernier propriétaire reste', async () => {
+    it("décliner une invitation la supprime ; quitter ; la communauté garde un propriétaire tant qu'elle a des membres", async () => {
       await call('PUT', '/communities/atelier/members/dave', who.alice, {});
       expect((await call('DELETE', '/communities/atelier/invitation', who.dave)).body).toEqual({ community: 'atelier', accepted: false });
       expect((await call('GET', '/billing', who.dave)).body.invitations).toEqual([]);
 
+      // alice, fondatrice, propriétaire faute d'apports : elle ne laisse pas bob sans propriétaire
+      const blocked = await call('DELETE', '/communities/atelier/membership', who.alice);
+      expect(blocked).toMatchObject({ status: 400, body: { error: { message: expect.stringContaining("n'aurait plus de propriétaire") } } });
       expect((await call('DELETE', '/communities/atelier/membership', who.bob)).body).toEqual({ community: 'atelier', left: true });
       expect((await call('GET', '/pools', who.bob)).body.items).toEqual([]);
-      const last = await call('DELETE', '/communities/atelier/membership', who.alice);
-      expect(last).toMatchObject({ status: 400, body: { error: { message: expect.stringContaining('au moins un propriétaire') } } });
+      // seule membre, alice peut partir
+      expect((await call('DELETE', '/communities/atelier/membership', who.alice)).status).toBe(200);
       expect((await call('DELETE', '/communities/club/membership', who.alice)).status).toBe(404);
     });
 
-    it('membres gérés par les propriétaires : upsert partiel, garde du dernier propriétaire', async () => {
-      expect((await call('GET', '/communities/atelier/members', who.bob)).status).toBe(404);
-      const list = await call('GET', '/communities/atelier/members', who.alice);
-      expect(list.body.items.map((m) => [m.name, m.role, m.monthly_limit, m.spent_30d, m.contributed, m.accepted])).toEqual([
-        ['alice', 'owner', null, 0, 0, true],
-        ['bob', 'member', 15, 0, 0, true],
+    it('le propriétaire est le membre qui a versé le plus au pot ; ex æquo, tous les premiers', async () => {
+      const members = async (as) => (await call('GET', '/communities/atelier/members', as)).body;
+      // personne n'a versé : la fondatrice désignée par l'admin
+      expect((await members(who.alice)).items.map((m) => [m.name, m.role, m.founder, m.contributed])).toEqual([
+        ['alice', 'owner', true, 0],
+        ['bob', 'member', false, 0],
       ]);
+      // bob verse : il devient propriétaire, alice redevient membre
+      await billing.credit({ community: 'atelier', contributor: 'bob', cents: 300, reference: 'bob-1' });
+      expect((await members(who.alice)).error.code).toBe('not_found');
+      expect((await members(who.bob)).items.map((m) => [m.name, m.role, m.contributed])).toEqual([
+        ['bob', 'owner', 3000],
+        ['alice', 'member', 0],
+      ]);
+      expect((await call('GET', '/billing', who.bob)).body.communities[0]).toMatchObject({ role: 'owner', monthly_limit: null });
+      // alice égale : copropriétaires
+      await billing.credit({ community: 'atelier', contributor: 'alice', cents: 300, reference: 'alice-1' });
+      expect((await members(who.alice)).items.filter((m) => m.role === 'owner').map((m) => m.name)).toEqual(['alice', 'bob']);
+      // un client révoqué ne compte plus : bob reste seul en tête quand alice l'est
+      await billing.credit({ community: 'atelier', contributor: 'alice', cents: 200, reference: 'alice-2' });
+      await clients.revokeClient({ name: 'alice' });
+      expect((await members(who.bob)).items.find((m) => m.name === 'bob').role).toBe('owner');
+      const [c] = await billing.listCommunities();
+      expect(c.members).toEqual(['bob:owner 3000 giri', 'alice:member 5000 giri']);
+    });
+
+    it("le propriétaire n'a pas de plafond ; le rôle ne se donne pas", async () => {
+      await expect(buy('bob', { query: 'a', pool: 'lora', pages: 2 })).rejects.toMatchObject({ code: 'spend_limit' });
+      await billing.credit({ community: 'atelier', contributor: 'bob', cents: 300, reference: 'bob-1' });
+      expect((await buy('bob', { query: 'a', pool: 'lora', pages: 2 })).request.price).toBe(20);
+      const res = await call('PUT', '/communities/atelier/members/alice', who.bob, { role: 'owner' });
+      expect(res).toMatchObject({ status: 400, body: { error: { message: expect.stringContaining('le propriétaire est le membre qui a versé le plus') } } });
+    });
+
+    it('membres gérés par le propriétaire : invitation, plafond en upsert partiel, retrait', async () => {
+      expect((await call('GET', '/communities/atelier/members', who.bob)).status).toBe(404);
       expect((await call('PUT', '/communities/atelier/members/dave', who.bob, {})).status).toBe(404);
       expect((await call('PUT', '/communities/atelier/members/personne', who.alice, {})).status).toBe(404);
       expect((await call('PUT', '/communities/atelier/members/bob', who.alice, { monthly_limit: -1 })).status).toBe(400);
       expect((await call('PUT', '/communities/atelier/members/bob', who.alice, { quota: 1 })).status).toBe(400);
-      // changer le rôle garde le plafond ; null le lève
-      expect((await call('PUT', '/communities/atelier/members/bob', who.alice, { role: 'owner' })).body)
-        .toMatchObject({ role: 'owner', monthly_limit: 15, accepted: true });
-      expect((await call('PUT', '/communities/atelier/members/bob', who.alice, { monthly_limit: null })).body)
-        .toMatchObject({ monthly_limit: null });
-      // alice peut partir maintenant que bob est propriétaire ; bob, seul, ne peut ni se rétrograder ni partir
-      expect((await call('DELETE', '/communities/atelier/members/alice', who.bob)).status).toBe(200);
-      expect((await call('PUT', '/communities/atelier/members/bob', who.bob, { role: 'member' })).status).toBe(400);
-      expect((await call('DELETE', '/communities/atelier/members/bob', who.bob)).status).toBe(400);
-      expect((await call('GET', '/communities/atelier/members', who.alice)).status).toBe(404);
+      expect((await call('PUT', '/communities/atelier/members/bob', who.alice, { monthly_limit: 40 })).body)
+        .toEqual({ community: 'atelier', name: 'bob', role: 'member', monthly_limit: 40, accepted: true });
+      expect((await call('PUT', '/communities/atelier/members/bob', who.alice, {})).body).toMatchObject({ monthly_limit: 40 });
+      expect((await call('PUT', '/communities/atelier/members/bob', who.alice, { monthly_limit: null })).body).toMatchObject({ monthly_limit: null });
+      // un propriétaire n'en écarte pas un autre ; un membre se retire
+      await billing.credit({ community: 'atelier', contributor: 'bob', cents: 300, reference: 'bob-1' });
+      await billing.credit({ community: 'atelier', contributor: 'alice', cents: 300, reference: 'alice-1' });
+      const res = await call('DELETE', '/communities/atelier/members/alice', who.bob);
+      expect(res).toMatchObject({ status: 400, body: { error: { message: expect.stringContaining('alice est propriétaire') } } });
+      await billing.setMember({ community: 'atelier', name: 'carol' });
+      expect((await call('DELETE', '/communities/atelier/members/carol', who.bob)).body).toEqual({ community: 'atelier', name: 'carol' });
+      expect((await call('DELETE', '/communities/atelier/members/carol', who.bob)).status).toBe(404);
     });
   });
 

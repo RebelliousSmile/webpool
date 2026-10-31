@@ -1365,7 +1365,7 @@
     },
     "/communities/{slug}/members/{name}": {
       "put": {
-        "summary": "Invite un client, ou change le rôle ou le plafond d'un membre (propriétaires seulement ; upsert partiel ; un invité devient membre en acceptant)",
+        "summary": "Invite un client, ou change le plafond d'un membre (propriétaires seulement ; upsert partiel ; un invité devient membre en acceptant)",
         "tags": [
           "recherches"
         ],
@@ -1424,7 +1424,7 @@
         }
       },
       "delete": {
-        "summary": "Retire un membre (propriétaires seulement ; la communauté garde un propriétaire actif)",
+        "summary": "Retire un membre (propriétaires seulement ; un propriétaire ne s'écarte pas, il part lui-même ; la communauté garde un propriétaire)",
         "tags": [
           "recherches"
         ],
@@ -1591,7 +1591,7 @@
     },
     "/communities/{slug}/membership": {
       "delete": {
-        "summary": "Quitte la communauté (le dernier propriétaire actif ne peut pas)",
+        "summary": "Quitte la communauté : un propriétaire qui part passe la main au plus gros apport suivant ; refusé s'il n'y aurait plus de propriétaire",
         "tags": [
           "recherches"
         ],
@@ -2741,7 +2741,8 @@
             "enum": [
               "owner",
               "member"
-            ]
+            ],
+            "description": "owner : le membre qui a versé le plus de giri au pot (ex æquo : tous les premiers ; tant que personne n'a versé, le fondateur désigné par l'admin) ; calculé, il ne se donne pas"
           },
           "balance": {
             "type": "integer",
@@ -2752,7 +2753,7 @@
               "integer",
               "null"
             ],
-            "description": "plafond du membre en giri sur 30 jours glissants, null : sans plafond"
+            "description": "plafond effectif du membre en giri sur 30 jours glissants, null : sans plafond (toujours null pour le propriétaire)"
           },
           "spent_30d": {
             "type": "integer",
@@ -3089,7 +3090,8 @@
           "revoked",
           "joined_at",
           "contributed",
-          "accepted"
+          "accepted",
+          "founder"
         ],
         "properties": {
           "name": {
@@ -3100,14 +3102,15 @@
             "enum": [
               "owner",
               "member"
-            ]
+            ],
+            "description": "owner : le membre qui a versé le plus de giri au pot (ex æquo : tous les premiers ; tant que personne n'a versé, le fondateur désigné par l'admin) ; calculé, il ne se donne pas"
           },
           "monthly_limit": {
             "type": [
               "integer",
               "null"
             ],
-            "description": "plafond en giri sur 30 jours glissants, null : sans plafond"
+            "description": "plafond enregistré en giri sur 30 jours, null : sans plafond ; ne s'applique pas au propriétaire"
           },
           "spent_30d": {
             "type": "integer"
@@ -3127,6 +3130,10 @@
           "accepted": {
             "type": "boolean",
             "description": "invitation acceptée ; un invité ne voit ni les pools ni le pot"
+          },
+          "founder": {
+            "type": "boolean",
+            "description": "fondateur désigné par l'admin : propriétaire tant que personne n'a versé au pot"
           }
         }
       },
@@ -3134,13 +3141,6 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "role": {
-            "type": "string",
-            "enum": [
-              "owner",
-              "member"
-            ]
-          },
           "monthly_limit": {
             "type": [
               "integer",
@@ -3150,7 +3150,7 @@
             "description": "null ou absent : sans plafond"
           }
         },
-        "description": "Upsert partiel : un champ absent garde sa valeur (nouveau membre : `member`, sans plafond) ; `monthly_limit: null` lève le plafond, 0 bloque la dépense."
+        "description": "Upsert partiel : `monthly_limit` absent garde sa valeur (nouveau membre : WEBPOOL_MEMBER_DEFAULT_LIMIT), null lève le plafond, 0 bloque la dépense. Le rôle ne se donne pas (le propriétaire est le plus gros apport au pot) : un champ `role` est refusé."
       },
       "CommunityMemberSet": {
         "type": "object",
@@ -3204,7 +3204,8 @@
             "enum": [
               "owner",
               "member"
-            ]
+            ],
+            "description": "owner : le membre qui a versé le plus de giri au pot (ex æquo : tous les premiers ; tant que personne n'a versé, le fondateur désigné par l'admin) ; calculé, il ne se donne pas"
           },
           "monthly_limit": {
             "type": [

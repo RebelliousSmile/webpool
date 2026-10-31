@@ -46,9 +46,12 @@ export async function addCommunity({ slug, label }) {
 export async function listCommunities() {
   const { rows } = await query(
     `SELECT c.slug, c.label, coalesce(w.balance, 0)::bigint AS balance,
-            (SELECT coalesce(array_agg(ac.name || ':' || cm.role || CASE WHEN cm.accepted_at IS NULL THEN ' (invité)' ELSE '' END
-                                       ORDER BY cm.role DESC, ac.name), '{}')
+            (SELECT coalesce(array_agg(ac.name || ':' || CASE WHEN st.is_owner THEN 'owner' ELSE 'member' END
+                                       || CASE WHEN cm.accepted_at IS NULL THEN ' (invité)' ELSE '' END
+                                       || CASE WHEN st.contributed > 0 THEN ' ' || st.contributed || ' giri' ELSE '' END
+                                       ORDER BY st.is_owner DESC, st.contributed DESC, ac.name), '{}')
                FROM community_member cm JOIN api_client ac ON ac.id = cm.api_client_id
+               JOIN community_standing st ON st.community_id = cm.community_id AND st.api_client_id = cm.api_client_id
               WHERE cm.community_id = c.id) AS members,
             (SELECT coalesce(array_agg(p.slug ORDER BY p.slug), '{}')
                FROM community_pool cp JOIN pool p ON p.id = cp.pool_id
@@ -285,7 +288,7 @@ export async function walletsFor(clientId) {
   // Une requête : dépense du membre sur 30 jours (débits moins remboursements)
   // et ses apports au pot commun (versements à son nom).
   const { rows } = await query(
-    `SELECT c.slug, c.label, cm.role, cm.monthly_limit, coalesce(w.balance, 0) AS balance,
+    `SELECT c.slug, c.label, st.is_owner, cm.monthly_limit, coalesce(w.balance, 0) AS balance,
             (SELECT coalesce(array_agg(p.slug ORDER BY p.slug), '{}')
                FROM community_pool cp JOIN pool p ON p.id = cp.pool_id WHERE cp.community_id = c.id) AS pools,
             greatest(0, -coalesce((SELECT sum(e.delta) FROM wallet_entry e
@@ -295,6 +298,7 @@ export async function walletsFor(clientId) {
                        WHERE e.wallet_id = w.id AND e.api_client_id = $1 AND e.kind = 'purchase'), 0)::bigint AS contributed
        FROM community_member cm
        JOIN community c ON c.id = cm.community_id
+       JOIN community_standing st ON st.community_id = cm.community_id AND st.api_client_id = cm.api_client_id
        LEFT JOIN wallet w ON w.community_id = c.id
       WHERE cm.api_client_id = $1 AND cm.accepted_at IS NOT NULL
       ORDER BY c.slug`,
@@ -303,9 +307,10 @@ export async function walletsFor(clientId) {
   const communities = rows.map((r) => ({
     slug: r.slug,
     label: r.label,
-    role: r.role,
+    role: r.is_owner ? 'owner' : 'member',
     balance: Number(r.balance),
-    monthly_limit: r.monthly_limit === null ? null : Number(r.monthly_limit),
+    // le propriétaire n'a pas de plafond : plafond effectif
+    monthly_limit: r.is_owner || r.monthly_limit === null ? null : Number(r.monthly_limit),
     spent_30d: Number(r.spent_30d),
     contributed: Number(r.contributed),
     pools: r.pools,
@@ -372,8 +377,7 @@ const lockCommunity = (db, communityId) =>
 async function ownedCommunity(db, { clientId, community }) {
   const { rows } = await db.query(
     `SELECT c.id FROM community c
-       JOIN community_member cm ON cm.community_id = c.id AND cm.api_client_id = $2 AND cm.role = 'owner'
-                                 AND cm.accepted_at IS NOT NULL
+       JOIN community_standing st ON st.community_id = c.id AND st.api_client_id = $2 AND st.is_owner
       WHERE c.slug = $1`,
     [community, clientId],
   );
@@ -381,26 +385,27 @@ async function ownedCommunity(db, { clientId, community }) {
   return Number(rows[0].id);
 }
 
-// Membres, avec leur dépense sur 30 jours et leurs apports au pot commun.
+// Membres, du propriétaire au plus petit apport : rôle calculé, fondateur,
+// plafond, dépense sur 30 jours, apports au pot commun.
 export async function listMembers({ clientId, community }) {
   const communityId = await ownedCommunity({ query }, { clientId, community });
   const { rows } = await query(
-    `SELECT ac.name, cm.role, cm.monthly_limit, cm.joined_at, ac.revoked_at IS NOT NULL AS revoked,
-            cm.accepted_at IS NOT NULL AS accepted,
+    `SELECT ac.name, st.is_owner, cm.role = 'owner' AS founder, cm.monthly_limit, cm.joined_at,
+            ac.revoked_at IS NOT NULL AS revoked, cm.accepted_at IS NOT NULL AS accepted,
             greatest(0, -coalesce((SELECT sum(e.delta) FROM wallet_entry e JOIN wallet w ON w.id = e.wallet_id
                                     WHERE w.community_id = cm.community_id AND e.api_client_id = cm.api_client_id
                                       AND e.kind IN ('debit', 'refund') AND e.created_at > now() - interval '30 days'), 0))::bigint AS spent_30d,
-            coalesce((SELECT sum(e.delta) FROM wallet_entry e JOIN wallet w ON w.id = e.wallet_id
-                       WHERE w.community_id = cm.community_id AND e.api_client_id = cm.api_client_id
-                         AND e.kind = 'purchase'), 0)::bigint AS contributed
+            st.contributed
        FROM community_member cm JOIN api_client ac ON ac.id = cm.api_client_id
+       JOIN community_standing st ON st.community_id = cm.community_id AND st.api_client_id = cm.api_client_id
       WHERE cm.community_id = $1
-      ORDER BY cm.role DESC, ac.name`,
+      ORDER BY st.is_owner DESC, st.contributed DESC, ac.name`,
     [communityId],
   );
   return rows.map((r) => ({
     name: r.name,
-    role: r.role,
+    role: r.is_owner ? 'owner' : 'member',
+    founder: r.founder,
     monthly_limit: r.monthly_limit === null ? null : Number(r.monthly_limit),
     spent_30d: Number(r.spent_30d),
     contributed: Number(r.contributed),
@@ -410,36 +415,51 @@ export async function listMembers({ clientId, community }) {
   }));
 }
 
-// Une communauté garde au moins un propriétaire : sinon plus personne ne la gère.
-async function assertOwnerLeft(db, communityId, name) {
+// Après un départ ou un retrait : s'il reste des membres actifs, l'un d'eux
+// doit être propriétaire (plus gros apport, ou fondateur si personne n'a
+// versé). Sinon la transaction est annulée.
+async function assertOwnerRemains(db, communityId) {
   const { rows } = await db.query(
-    `SELECT count(*)::int AS n FROM community_member cm JOIN api_client ac ON ac.id = cm.api_client_id
-      WHERE cm.community_id = $1 AND cm.role = 'owner' AND ac.name <> $2 AND ac.revoked_at IS NULL
-        AND cm.accepted_at IS NOT NULL`,
-    [communityId, name],
+    `SELECT bool_or(active) AS members, bool_or(is_owner) AS owner FROM community_standing WHERE community_id = $1`,
+    [communityId],
   );
-  if (rows[0].n === 0) throw new BillingError('invalid', 'La communauté doit garder au moins un propriétaire actif');
+  if (rows[0].members && !rows[0].owner) {
+    throw new BillingError('invalid', "La communauté n'aurait plus de propriétaire : un autre membre doit d'abord verser au pot");
+  }
 }
 
-// Invite un client ou change le rôle ou le plafond d'un membre, par un
-// propriétaire (upsert partiel). Un nouveau membre reste invité tant qu'il n'a
-// pas accepté (POST /communities/{slug}/invitation).
+async function isOwner(db, communityId, name) {
+  const { rows } = await db.query(
+    `SELECT st.is_owner FROM community_standing st JOIN api_client ac ON ac.id = st.api_client_id
+      WHERE st.community_id = $1 AND ac.name = $2`,
+    [communityId, name],
+  );
+  return rows[0]?.is_owner === true;
+}
+
+// Invite un client ou change le plafond d'un membre, par un propriétaire
+// (upsert partiel). Le rôle ne se donne pas : le propriétaire est celui qui a
+// versé le plus au pot. Un nouveau membre reste invité tant qu'il n'a pas
+// accepté (POST /communities/{slug}/invitation).
 export async function ownerSetMember({ clientId, community, name, role, monthlyLimit }) {
-  checkMemberFields(role, monthlyLimit);
+  if (role !== undefined) {
+    throw new BillingError('invalid', 'Le rôle ne se donne pas : le propriétaire est le membre qui a versé le plus de giri au pot');
+  }
+  checkMemberFields(undefined, monthlyLimit);
   return withTransaction(async (db) => {
     const communityId = await ownedCommunity(db, { clientId, community });
     // Sérialise les changements de rôle : la garde du dernier propriétaire reste juste.
     await lockCommunity(db, communityId);
     const { rows } = await db.query('SELECT id FROM api_client WHERE name = $1 AND revoked_at IS NULL', [name]);
     if (rows.length === 0) throw new BillingError('not_found', `Client inconnu ou révoqué : ${name}`);
-    if (role === 'member') await assertOwnerLeft(db, communityId, name);
     // Un client ajouté par un propriétaire est invité : il n'entre qu'en acceptant.
     const { rows: set } = await db.query(
       UPSERT_MEMBER,
-      upsertParams({ communityId, clientId: rows[0].id, role, monthlyLimit, accept: false }),
+      upsertParams({ communityId, clientId: rows[0].id, role: undefined, monthlyLimit, accept: false }),
     );
     const m = memberRow(set[0]);
-    return { community, name, role: m.role, monthly_limit: m.monthlyLimit, accepted: m.accepted };
+    const owner = await isOwner(db, communityId, name);
+    return { community, name, role: owner ? 'owner' : 'member', monthly_limit: m.monthlyLimit, accepted: m.accepted };
   });
 }
 
@@ -447,13 +467,18 @@ export async function ownerRemoveMember({ clientId, community, name }) {
   return withTransaction(async (db) => {
     const communityId = await ownedCommunity(db, { clientId, community });
     await lockCommunity(db, communityId);
-    await assertOwnerLeft(db, communityId, name);
+    // Un propriétaire l'est par ses apports : un autre propriétaire ne l'écarte
+    // pas. Il peut partir lui-même (DELETE …/membership).
+    if (await isOwner(db, communityId, name)) {
+      throw new BillingError('invalid', `${name} est propriétaire (plus gros apport au pot) : seul lui peut quitter la communauté`);
+    }
     const { rowCount } = await db.query(
       `DELETE FROM community_member WHERE community_id = $1
           AND api_client_id = (SELECT id FROM api_client WHERE name = $2)`,
       [communityId, name],
     );
     if (rowCount === 0) throw new BillingError('not_found', `${name} n'est pas membre de ${community}`);
+    await assertOwnerRemains(db, communityId);
     return { community, name };
   });
 }
@@ -493,8 +518,8 @@ export async function answerInvitation({ clientId, community, accept }) {
   return { community, accepted: accept };
 }
 
-// Quitter une communauté (membre actif) ; le dernier propriétaire ne part pas.
-export async function leaveCommunity({ clientId, name, community }) {
+// Quitter une communauté (membre actif).
+export async function leaveCommunity({ clientId, community }) {
   return withTransaction(async (db) => {
     const { rows } = await db.query(
       `SELECT c.id FROM community c JOIN community_member cm ON cm.community_id = c.id AND cm.api_client_id = $2
@@ -503,8 +528,10 @@ export async function leaveCommunity({ clientId, name, community }) {
     );
     if (rows.length === 0) throw new BillingError('not_found', `Communauté inconnue : ${community}`);
     await lockCommunity(db, rows[0].id);
-    await assertOwnerLeft(db, rows[0].id, name);
     await db.query('DELETE FROM community_member WHERE community_id = $1 AND api_client_id = $2', [rows[0].id, clientId]);
+    // Le propriétaire qui part passe la main au plus gros apport suivant ; s'il
+    // n'y en a pas (personne d'autre n'a versé, pas de fondateur), il reste.
+    await assertOwnerRemains(db, rows[0].id);
     return { community, left: true };
   });
 }

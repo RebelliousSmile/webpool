@@ -54,7 +54,9 @@ Usage :
   webpool client ungrant --name <nom> --slug <pool>
   webpool community add --slug <slug> [--label "…"]
   webpool community list
-  webpool community join --slug <communauté> --name <client> [--role owner|member] [--monthly N|none]   (plafond en giri sur 30 jours ; option absente : inchangée)
+  webpool community join --slug <communauté> --name <client> [--role owner|member] [--monthly N|none]
+                                          (membre actif ; --role owner : fondateur, propriétaire tant que personne n'a versé au pot ;
+                                           ensuite le propriétaire est le plus gros apport ; plafond en giri sur 30 jours, option absente : inchangée)
   webpool community leave --slug <communauté> --name <client>
   webpool community attach|detach --slug <communauté> --pool <pool>   (pools visibles par les membres, payables par la communauté)
   webpool wallet credit (--name <client> | --community <slug> [--by <membre>]) --eur 12,50 --ref <paiement> [--note "…"] [--force]
@@ -373,7 +375,7 @@ async function main() {
           monthlyLimit = Number(values.monthly);
         }
         const m = await setMember({ community: values.slug, name: values.name, role: values.role, monthlyLimit });
-        console.log(`"${values.name}" membre (${m.role}) de "${values.slug}", ${m.monthlyLimit === null ? 'sans plafond' : `plafond ${m.monthlyLimit} giri / 30 jours`}.`);
+        console.log(`"${values.name}" membre${m.role === 'owner' ? ' fondateur' : ''} de "${values.slug}", ${m.monthlyLimit === null ? 'sans plafond' : `plafond ${m.monthlyLimit} giri / 30 jours`}.`);
       } else if (subcommand === 'leave') {
         if (!values.slug || !values.name) throw new Error('community leave : --slug et --name requis');
         await removeMember({ community: values.slug, name: values.name });

@@ -513,13 +513,14 @@ export async function billing({ client }) {
 // Communauté dont le client est membre (propriétaire si `owner`), sinon 404.
 async function membership(client, slug, { owner = false } = {}) {
   const { rows } = await query(
-    `SELECT c.id, cm.role, w.id AS wallet_id FROM community c
+    `SELECT c.id, st.is_owner, w.id AS wallet_id FROM community c
        JOIN community_member cm ON cm.community_id = c.id AND cm.api_client_id = $2 AND cm.accepted_at IS NOT NULL
+       JOIN community_standing st ON st.community_id = c.id AND st.api_client_id = cm.api_client_id
        LEFT JOIN wallet w ON w.community_id = c.id
       WHERE c.slug = $1`,
     [slug, client.id],
   );
-  if (rows.length === 0 || (owner && rows[0].role !== 'owner')) {
+  if (rows.length === 0 || (owner && !rows[0].is_owner)) {
     throw notFound(owner ? `Communauté inconnue ou réservée à ses propriétaires : ${slug}` : `Communauté inconnue : ${slug}`);
   }
   return { id: Number(rows[0].id), walletId: rows[0].wallet_id === null ? null : Number(rows[0].wallet_id) };
@@ -631,5 +632,5 @@ export async function declineInvitation({ client, params }) {
 }
 
 export async function leaveCommunityHandler({ client, params }) {
-  return { body: await billingCall(() => leaveCommunity({ clientId: client.id, name: client.name, community: params.slug })) };
+  return { body: await billingCall(() => leaveCommunity({ clientId: client.id, community: params.slug })) };
 }

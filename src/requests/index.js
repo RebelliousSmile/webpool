@@ -87,7 +87,7 @@ async function visiblePoolId(db, { clientId, isAdmin, slug }) {
 
 // Inscrit une recherche et la paie, en une transaction. Un pool d'une
 // communauté du client se paie toujours sur son pot, avec le plafond du
-// membre ; le pot d'une communauté ne paie que ses pools. Avec
+// membre (le propriétaire, plus gros apport, n'en a pas) ; le pot d'une communauté ne paie que ses pools. Avec
 // `idempotencyKey`, un second envoi de la même clé rend la recherche déjà
 // achetée (`replayed`), sans nouveau débit.
 export async function createRequest({
@@ -158,8 +158,9 @@ export async function createRequest({
     let member = null;
     if (payer) {
       const { rows } = await db.query(
-        `SELECT c.id, cm.monthly_limit FROM community c
+        `SELECT c.id, CASE WHEN st.is_owner THEN NULL ELSE cm.monthly_limit END AS monthly_limit FROM community c
            JOIN community_member cm ON cm.community_id = c.id AND cm.api_client_id = $2 AND cm.accepted_at IS NOT NULL
+           JOIN community_standing st ON st.community_id = c.id AND st.api_client_id = cm.api_client_id
           WHERE c.slug = $1`,
         [payer, clientId],
       );
