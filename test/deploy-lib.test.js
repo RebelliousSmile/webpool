@@ -147,7 +147,12 @@ describe('DATABASE_URL_CHECK', () => {
     const file = join(dir, 'x.env');
     writeFileSync(file, url === undefined ? 'AUTRE=1\n' : `DATABASE_URL=${url}\n`);
     try {
-      return execFileSync(process.execPath, ['-e', DATABASE_URL_CHECK, file], { encoding: 'utf8' });
+      // process.loadEnvFile n'écrase pas une variable déjà définie : sans ce
+      // retrait, la DATABASE_URL de l'environnement (la CI en pose une)
+      // masquerait celle du fichier.
+      const env = { ...process.env };
+      delete env.DATABASE_URL;
+      return execFileSync(process.execPath, ['-e', DATABASE_URL_CHECK, file], { encoding: 'utf8', env });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
