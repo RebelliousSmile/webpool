@@ -270,6 +270,60 @@
         ]
       }
     },
+    "/pools/{slug}/export": {
+      "get": {
+        "summary": "Export d'un pool visible, sans définition ni score",
+        "tags": [
+          "pools"
+        ],
+        "description": "`txt` : une URL par ligne, dans l'ordre de rang. Un pool non accordé répond 404. L'export admin (`/admin/pools/{slug}/export`) inclut définition et scores.",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "Format",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "csv",
+                "md",
+                "txt"
+              ],
+              "default": "json"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fichier",
+            "content": {
+              "application/json": {},
+              "text/csv": {},
+              "text/markdown": {},
+              "text/plain": {}
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
     "/admin/stats": {
       "get": {
         "summary": "Volumes du corpus, des runs, des domaines et de la frontière",
@@ -308,7 +362,8 @@
             "content": {
               "application/json": {},
               "text/csv": {},
-              "text/markdown": {}
+              "text/markdown": {},
+              "text/plain": {}
             }
           },
           "401": {
@@ -339,7 +394,8 @@
               "enum": [
                 "json",
                 "csv",
-                "md"
+                "md",
+                "txt"
               ],
               "default": "json"
             }
@@ -1372,6 +1428,19 @@
               "null"
             ],
             "description": "Chemin du favicon du domaine en cache (WebP 64 px) ; null si aucun"
+          },
+          "usage_commercial": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "libre",
+              "sous-conditions",
+              "payant",
+              "non-commercial",
+              null
+            ]
           }
         }
       },

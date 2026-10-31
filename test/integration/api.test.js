@@ -150,6 +150,7 @@ describe.skipIf(!available)('API HTTP sur PostgreSQL', () => {
     expect(all.total).toBe(3);
     const byDomain = (await get('/admin/urls?domain=GitHub.com', admin)).body;
     expect(byDomain.items.map((u) => u.domain)).toEqual(['github.com']);
+    expect(byDomain.items[0].usage_commercial).toBe('libre');
     // % est cherché littéralement
     expect((await get('/admin/urls?q=50%25', admin)).body.total).toBe(1);
     expect((await get('/admin/urls?q=%25', admin)).body.total).toBe(1);
@@ -197,6 +198,23 @@ describe.skipIf(!available)('API HTTP sur PostgreSQL', () => {
     expect(csv.body.split('\n')[0]).toBe('rank,url,domain,title,score');
     expect((await get('/admin/pools/nope/export', admin)).status).toBe(404);
     expect((await get('/admin/pools/lora/export?format=xml', admin)).status).toBe(400);
+    expect((await get('/admin/pools/lora/export?format=txt', admin)).body.trimEnd().split('\n')).toHaveLength(3);
+  });
+
+  it('ouvre l’export aux clients read, sur leurs pools, sans définition ni score', async () => {
+    const txt = await get('/pools/lora/export?format=txt', reader);
+    expect(txt.status).toBe(200);
+    expect(txt.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+    expect(txt.headers.get('content-disposition')).toBe('attachment; filename="lora.txt"');
+    const items = (await get('/pools/lora/items', admin)).body.items;
+    expect(txt.body).toBe(items.map((i) => `${i.url}\n`).join(''));
+    const json = await get('/pools/lora/export', reader);
+    expect(json.body.pool).not.toHaveProperty('definition');
+    expect(json.body.items[0]).not.toHaveProperty('score');
+    expect((await get('/pools/lora/export?format=csv', reader)).body.split('\n')[0]).toBe('rank,url,domain,title');
+    expect((await get('/pools/secret/export?format=txt', reader)).status).toBe(404);
+    expect((await get('/pools/lora/export?format=xml', reader)).status).toBe(400);
+    expect((await get('/pools/lora/export')).status).toBe(401);
   });
 
   it('serve démarre, répond et s\u2019arrête sur SIGTERM', async () => {

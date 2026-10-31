@@ -25,7 +25,7 @@ Usage :
   webpool pool create --slug <slug> [--label "…"] --file definition.json [--force]
   webpool pool refresh --slug <slug>
   webpool pool show --slug <slug>
-  webpool pool export --slug <slug> [--format json|csv|md] [--out fichier]
+  webpool pool export --slug <slug> [--format json|csv|md|txt] [--out fichier]
   webpool pool list
   webpool domain list [--to-qualify] [--limit N]
   webpool domain set --domain <domaine> --usage libre|sous-conditions|payant|non-commercial [--note "…"]
