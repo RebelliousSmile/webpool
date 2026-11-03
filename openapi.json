@@ -538,6 +538,14 @@
             }
           },
           {
+            "name": "quarantined",
+            "in": "query",
+            "description": "true : liens en quarantaine seulement ; false : hors quarantaine",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "order",
             "in": "query",
             "description": "Ordre",
@@ -2073,6 +2081,10 @@
           "pools": {
             "type": "integer"
           },
+          "quarantined": {
+            "type": "integer",
+            "description": "Liens en quarantaine (3 échecs francs consécutifs)"
+          },
           "domain_profile": {
             "type": "object",
             "properties": {
@@ -2185,6 +2197,22 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Dernier contrôle du lien ; null si jamais testé"
+          },
+          "quarantined_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Mise en quarantaine ; null si le lien n'y est pas"
           },
           "primary_theme": {
             "type": [
@@ -2341,6 +2369,26 @@
             ],
             "format": "date-time"
           },
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Dernier contrôle du lien ; null si jamais testé"
+          },
+          "quarantined_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Mise en quarantaine ; null si le lien n'y est pas"
+          },
+          "dead_streak": {
+            "type": "integer",
+            "description": "Échecs francs consécutifs comptés ; remis à 0 par un succès"
+          },
           "usage_commercial": {
             "type": [
               "string",
@@ -2441,6 +2489,13 @@
               }
             }
           },
+          "checks": {
+            "type": "array",
+            "description": "10 derniers contrôles, du plus récent au plus ancien",
+            "items": {
+              "$ref": "#/components/schemas/UrlCheck"
+            }
+          },
           "description": {
             "type": [
               "string",
@@ -2499,6 +2554,38 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "UrlCheck": {
+        "type": "object",
+        "properties": {
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "http_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Statut HTTP final ; null si la requête a échoué"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "dead",
+              "unsure"
+            ],
+            "description": "ok : 2xx ; dead : échec franc, compté ; unsure : ambigu, historisé sans être compté"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Étiquette de l'erreur réseau (ENOTFOUND, TimeoutError, TOO_MANY_REDIRECTS, HOST_REFUSED…)"
           }
         }
       },

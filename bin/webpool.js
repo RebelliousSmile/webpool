@@ -11,8 +11,9 @@ import { formatPool } from '../src/pools/export.js';
 import { stats } from '../src/stats.js';
 import { assertUsage, listDomains, qualifyDomain, setExploreExcluded } from '../src/domains/index.js';
 import { addQuery, explore, importQueries, listPipes, listQueries, parseTags } from '../src/explore/index.js';
-import { cycle } from '../src/cycle/index.js';
+import { checkLine, cycle } from '../src/cycle/index.js';
 import { cacheMedia } from '../src/media/index.js';
+import { checkLinks } from '../src/check/index.js';
 import { addClient, listClients, revokeClient, setPoolAccess } from '../src/api/clients.js';
 import { config } from '../src/config.js';
 import { withPipelineLock } from '../src/lock.js';
@@ -45,7 +46,8 @@ Usage :
   webpool pipe list                        (tuyaux flot:<slug> : requêtes actives, pression et référence de la dernière visite)
   webpool explore --budget N [--provider p] [--limit N]   (au plus N appels aux providers, ceux du tuyau courant d'abord)
   webpool media [--limit N] [--retry-failed]   (vignettes et favicons en attente : téléchargés, réduits en WebP, mis en cache)
-  webpool cycle --budget N [--provider p] [--offline]   (explore, normalize, classify et media jusqu'à vider la file, refresh des pools)
+  webpool check [--limit N]   (statut HTTP des liens les moins récemment testés ; 3 échecs francs de suite : quarantaine)
+  webpool cycle --budget N [--provider p] [--offline]   (explore, normalize, classify et media jusqu'à vider la file, check, refresh des pools)
   webpool serve [--port N] [--host h]   (API HTTP, voir openapi.json)
   webpool client add --name <nom> [--scope admin|read]   (affiche le jeton une seule fois)
   webpool client list
@@ -294,6 +296,11 @@ async function main() {
       console.log(
         `Media run #${res.runId} : ${res.thumbs} vignettes, ${res.favicons} favicons, ${res.failed} échecs (sur ${res.total}).`,
       );
+      break;
+    }
+    case 'check': {
+      const res = await checkLinks(limit ? { limit } : {});
+      console.log(`Check run #${res.runId} : ${checkLine(res)}.`);
       break;
     }
     case 'cycle': {

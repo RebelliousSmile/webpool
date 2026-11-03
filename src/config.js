@@ -59,6 +59,13 @@ export const config = Object.freeze({
   mediaDir: process.env.WEBPOOL_MEDIA_DIR || path.join(rootDir, 'var', 'media'),
   mediaMaxBytes: intEnv('WEBPOOL_MEDIA_MAX_BYTES', 5 * 1024 * 1024, 1),
   mediaConcurrency: intEnv('WEBPOOL_MEDIA_CONCURRENCY', 4, 1),
+  // Contrôle des liens (webpool check, étape du cycle) : liens testés par passe,
+  // heures avant de retester un lien, échecs francs consécutifs avant la
+  // quarantaine, jours de conservation de l'historique
+  checkLimit: intEnv('WEBPOOL_CHECK_LIMIT', 300, 1),
+  checkIntervalHours: intEnv('WEBPOOL_CHECK_INTERVAL_HOURS', 20, 1),
+  checkThreshold: intEnv('WEBPOOL_CHECK_THRESHOLD', 3, 1),
+  checkRetentionDays: intEnv('WEBPOOL_CHECK_RETENTION_DAYS', 90, 1),
   // API HTTP (webpool serve) : PORT et IP sont fournis par l'hébergeur (alwaysdata)
   apiPort: process.env.WEBPOOL_API_PORT ? intEnv('WEBPOOL_API_PORT', 3000, 1) : intEnv('PORT', 3000, 1),
   apiHost: process.env.WEBPOOL_API_HOST || process.env.IP || '127.0.0.1',

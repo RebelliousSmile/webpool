@@ -58,10 +58,13 @@ describe.skipIf(!available)('cycle sur PostgreSQL', () => {
       ['normalize', true],
       ['classify', true],
       ['media', true],
+      ['check', true],
       ['pools', true],
     ]);
     expect(res.steps.find((st) => st.name === 'media').line).toBe('sautée (hors ligne)');
-    const [exp, norm, cls, , pl] = res.steps;
+    expect(res.steps.find((st) => st.name === 'check').line).toBe('sautée (hors ligne)');
+    expect((await query('SELECT count(*)::int AS n FROM url_check')).rows[0].n).toBe(0);
+    const [exp, norm, cls, , , pl] = res.steps;
     expect(exp.result.newUrls).toBe(150);
     expect(exp.result.errors).toBe(1);
     expect(exp.line).toContain(`#${broken.id} en échec`);
@@ -89,6 +92,7 @@ describe.skipIf(!available)('cycle sur PostgreSQL', () => {
       ['normalize', true],
       ['classify', true],
       ['media', true],
+      ['check', true],
       ['pools', true],
     ]);
     expect(res.steps.find((st) => st.name === 'pools').line).toBe('aucun pool');
