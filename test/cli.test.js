@@ -96,8 +96,9 @@ describe('CLI', () => {
 });
 
 describe('CLI — DATABASE_URL hors développement', () => {
-  const rest = { ...process.env };
-  delete rest.DATABASE_URL;
+  // Vide plutôt qu'absente : process.loadEnvFile n'écrase pas une variable
+  // définie, le .env du poste ne la remplit donc pas ; vide vaut absente.
+  const rest = { ...process.env, DATABASE_URL: '' };
 
   it('arrête net, avec un message clair, une commande qui ouvre la base', async () => {
     const { code, stderr } = await cliWithEnv({ ...rest, NODE_ENV: 'production' }, 'stats');
