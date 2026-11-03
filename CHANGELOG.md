@@ -5,8 +5,12 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions [Sem
 
 ## [Unreleased]
 
+## [v0.2.0] - 2026-11-03
+
 ### Added
 
+- Contrôle des liens (`webpool check`, étape de `cycle`) : statut HTTP final de chaque lien testé et historisé (table `url_check`, migration `013_url_check`) ; 2xx sain, 404, 410, DNS, connexion refusée, TLS invalide et boucle de redirections comptés comme échecs francs, 403, 429, 5xx et délais historisés sans compter ; trois échecs francs consécutifs espacés d'au moins un jour mettent le lien en quarantaine (`quarantined_at`), exclu des pools sans être supprimé, et un succès l'en sort. Réglages `WEBPOOL_CHECK_LIMIT`, `WEBPOOL_CHECK_INTERVAL_HOURS`, `WEBPOOL_CHECK_THRESHOLD`, `WEBPOOL_CHECK_RETENTION_DAYS`.
+- API : dernier test, quarantaine et historique des contrôles dans la fiche d'un lien (`checked_at`, `quarantined_at`, `checks`), filtre `quarantined` de la liste et compteur des liens en quarantaine.
 - Le propriétaire d'une communauté est le membre qui a versé le plus de giri au pot (ex æquo : copropriétaires ; tant que personne n'a versé : le fondateur désigné par l'admin) ; calculé par la vue `community_standing` (migration `012_community_ownership`), il ne se donne plus par l'API, n'a pas de plafond, ne peut être écarté par un autre propriétaire ; un départ ne peut laisser des membres sans propriétaire. Champ `founder` dans la liste des membres.
 - Audit du 2026-10-31, recherches payantes : clé d'idempotence d'achat (`Idempotency-Key`, 200 et `Idempotent-Replayed` sur une clé rejouée) ; invitations aux communautés (`POST|DELETE /communities/{slug}/invitation`, `DELETE /communities/{slug}/membership`, `invitations` dans `/billing`, champ `accepted`) ; plafond par défaut d'un nouveau membre (`WEBPOOL_MEMBER_DEFAULT_LIMIT`) ; reprise du post-traitement des recherches (`processed_at`), étapes isolées, code de sortie 1 ; migration `011_requests_hardening` (idempotence, post-traitement, catégorie d'erreur, invitations, index) ; tests CLI des commandes de facturation, tests concurrents, rôle PostgreSQL minimal testé.
 
@@ -29,6 +33,7 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions [Sem
 
 ### Changed
 
+- Cycle quotidien : tâche planifiée `0 4 * * *` au lieu d'hebdomadaire (README, contrat de déploiement).
 - `src/pipeline/` partagé par `cycle` et `requests run` ; règle de visibilité des pools unique (`src/access.js`) ; `include_requests` en sélection en deux parties (semi-jointure indexée) ; `listPools` compte après filtrage.
 - Dépendances de développement : vitest 5.0.5, vite 8.3.5, `minimatch` ≥ 11.0.1 (override).
 
@@ -52,6 +57,7 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions [Sem
 - Test des critères `recent` : la regex contenait un caractère de contrôle au lieu de `\b` et ne vérifiait rien.
 - Une variable `PORT` invalide n'arrête plus les commandes quand `WEBPOOL_API_PORT` est défini.
 - Erreurs de repli de provider et de connexion au déploiement : cause d'origine conservée (`cause`).
+- Tests indépendants du poste : le `.env` local ne fournit plus `DATABASE_URL` au test qui en vérifie l'absence ; le test `PGPASSWORD` de `deploy-lib`, propre à la cible POSIX, est sauté sous Windows.
 
 ### Security
 
