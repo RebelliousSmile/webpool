@@ -715,10 +715,14 @@ créée dans l'admin, pas par le script de déploiement :
 | Commande | `node bin/webpool.js cycle --budget 20` |
 | Répertoire de travail | `www/webpool` |
 | Environnement | `NODEJS_VERSION=24` |
-| Fréquence | `0 4 * * 1` (lundi, 4 h) |
+| Fréquence | `0 4 * * *` (chaque jour, 4 h) |
 
-Avec 20 appels par semaine, le coût reste autour de 0,11 $ (OpenRouter, moteur
-Perplexity).
+Un passage fait au plus 20 appels, soit environ 0,11 $ (OpenRouter, moteur
+Perplexity) ; le plafond quotidien (environ 3,30 $ par mois) n'est atteint que si
+de nouvelles requêtes arrivent chaque jour. L'épuisement borne la dépense : une
+requête `openrouter` s'épuise à son premier passage et se repose
+`WEBPOOL_EXPLORE_REST_DAYS` jours, et un passage sans requête active ne fait aucun
+appel.
 
 Les recherches payantes ont leur propre tâche, à la même configuration :
 commande `node bin/webpool.js requests run`, fréquence `*/15 * * * *`. Le verrou
