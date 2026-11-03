@@ -128,8 +128,8 @@ export function buildPoolQuery(definition, { poolId = null } = {}) {
   if (definition.min_quality != null) {
     thresholds.push(`ui.quality_score >= ${add(definition.min_quality)}`);
   }
-  // Toujours appliqués : classée, seuils de qualité, domaines exclus.
-  const always = ["ui.status = 'classified'", ...thresholds];
+  // Toujours appliqués : classée, hors quarantaine, seuils de qualité, domaines exclus.
+  const always = ["ui.status = 'classified'", 'ui.quarantined_at IS NULL', ...thresholds];
   if (definition.domains_exclude?.length) {
     always.push(`NOT (ui.domain = ANY(${add(definition.domains_exclude)}))`);
   }

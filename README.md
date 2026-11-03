@@ -305,8 +305,9 @@ facette des URLs déjà classées, sans reclasser. À la classification, elle
 l'emporte sur les motifs de la taxonomie. Faute de qualification, la facette
 vaut `a-qualifier`, sauf si un motif de la taxonomie s'applique.
 
-**Cycle.** `cycle` enchaîne `explore`, puis `normalize` et `classify` par lots
-de 100 jusqu'à vider la file, puis `pool refresh` de chaque pool. Il affiche
+**Cycle.** `cycle` enchaîne `explore`, puis `normalize`, `classify` et `media` par lots
+de 100 jusqu'à vider la file, puis `check` (contrôle des liens, sauté hors ligne),
+puis `pool refresh` de chaque pool. Il affiche
 une ligne par étape : appels et requêtes en échec, URLs et domaines nouveaux,
 domaines à qualifier, taille de chaque pool. Une étape en échec n'empêche pas
 les suivantes. Le code de sortie vaut 1 si une étape échoue entièrement :
@@ -515,6 +516,45 @@ La famille de source (recherche, archives et musées, banques d'images,
 communautés, plateformes vidéo, presse et guides, autres) se calcule à la lecture
 depuis le domaine (`src/media/kinds.js`) : enrichir la liste ne demande aucune
 reprise du corpus.
+
+## Contrôle des liens
+
+```bash
+pnpm webpool check [--limit N]   # statut HTTP des liens les moins récemment testés
+```
+
+`webpool check` (aussi étape de `cycle`, avant le refresh des pools, sautée hors
+ligne) teste le statut HTTP **final** des liens normalisés ou classés (redirections
+suivies, corps jamais lu, pas de rejeu) et historise chaque test dans `url_check`.
+Trois verdicts :
+
+- `ok` : 2xx ;
+- `dead` (échec franc) : 404, 410, domaine inexistant (`ENOTFOUND`), connexion
+  refusée (`ECONNREFUSED`), certificat expiré (`CERT_HAS_EXPIRED`) ou émis pour un
+  autre nom (`ERR_TLS_CERT_ALTNAME_INVALID`), hôte devenu privé ;
+- `unsure` : tout le reste — 403, 429, 5xx, délai dépassé, `EAI_AGAIN`, trop de
+  redirections (souvent un mur de consentement qui pose un cookie), chaîne de
+  certificats incomplète (Node ne la complète pas, les navigateurs si), erreur
+  inconnue. Historisé, jamais compté : une IP de datacenter reçoit souvent 403 et
+  429 de sites sains.
+
+Trois `dead` consécutifs (un `unsure` entre deux ne compte pas et ne remet pas à
+zéro) mettent le lien en **quarantaine** (`url_item.quarantined_at`) : il garde son
+statut, ses thèmes et ses facettes, mais la sélection des pools l'écarte. Le
+premier `ok` remet le compteur à zéro et lève la quarantaine ; le lien revient à
+son pool au refresh suivant. Un lien n'est jamais retesté moins de
+`WEBPOOL_CHECK_INTERVAL_HOURS` après son dernier test : avec le cycle quotidien,
+un lien mort est écarté en 3 jours. Au-delà de `WEBPOOL_CHECK_LIMIT` liens à
+tester, chacun l'est tous les ⌈N / limite⌉ jours : relever alors la limite. Une
+passe tient le verrou du pipeline, au pire limite / `WEBPOOL_CONCURRENCY` ×
+`WEBPOOL_FETCH_TIMEOUT_MS` (≈ 13 min par défaut).
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `WEBPOOL_CHECK_LIMIT` | 300 | liens testés par passe, les moins récemment testés d'abord |
+| `WEBPOOL_CHECK_INTERVAL_HOURS` | 20 | heures avant de retester un lien (20 et non 24 : le cycle dérive de quelques minutes) |
+| `WEBPOOL_CHECK_THRESHOLD` | 3 | échecs francs consécutifs avant la quarantaine |
+| `WEBPOOL_CHECK_RETENTION_DAYS` | 90 | jours d'historique conservés dans `url_check` |
 
 ## API HTTP
 
@@ -742,7 +782,7 @@ sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
 
 | Chemin | Rôle |
 |---|---|
-| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) ; `002` à `011` : domain_profile, search_query, search_query_run, exclusion_hash, api_client, tuyaux, url_media, communautés, portefeuilles et recherches payantes, rétention du grand livre et pools publics, idempotence, reprise du post-traitement, invitations et index |
+| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) ; `002` à `013` : domain_profile, search_query, search_query_run, exclusion_hash, api_client, tuyaux, url_media, communautés, portefeuilles et recherches payantes, rétention du grand livre et pools publics, idempotence, reprise du post-traitement, invitations et index, propriétaire de communauté, contrôle des liens (url_check, quarantaine) |
 | `src/ingest/` | Providers SERP (`file`, `brave`, `searxng`, `europeana`, `flickr`, `openrouter`) + insertion tracée |
 | `src/normalize/` | Canonisation stricte (tracking, redirections, dédup domaine+canonique), fetch poli |
 | `src/classify/` | Classifieur par règles piloté par `config/taxonomy.json` |
@@ -750,7 +790,8 @@ sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
 | `src/explore/` | Frontière de requêtes, exclusion des domaines saturés, `explore` (fonctions pures dans `frontier.js` et `exclusion.js`) |
 | `src/domains/` | Registre des domaines et facette `usage-commercial` |
 | `src/media/` | Type de média et famille de source (`kinds.js`), réduction d'images (`thumbnail.js`, sharp), cache `webpool media` |
-| `src/cycle/` | `cycle` : explore, puis les étapes du pipeline et le refresh de tous les pools |
+| `src/cycle/` | `cycle` : explore, puis les étapes du pipeline, le contrôle des liens et le refresh de tous les pools |
+| `src/check/` | Contrôle des liens `webpool check` ; verdict et compteur de quarantaine purs (`verdict.js`) |
 | `src/pipeline/` | Étapes partagées par `cycle` et `requests run` (normalize, classify, media par lots, refresh de pools), isolées les unes des autres |
 | `src/lock.js` | Verrou consultatif du pipeline (`cycle`, `requests run`, `normalize` et `classify` à la main) |
 | `src/access.js` | Règle unique de visibilité d'un pool (public, accordé, communauté acceptée) |
