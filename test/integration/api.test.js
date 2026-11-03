@@ -168,6 +168,53 @@ describe.skipIf(!available)('API HTTP sur PostgreSQL', () => {
     expect((await get('/admin/urls/abc', admin)).status).toBe(404);
   });
 
+  it('expose le contrôle des liens : historique, filtre quarantaine, compteur', async () => {
+    const q = (...a) => db.query(...a);
+    const idOf = async (domain) => (await get(`/admin/urls?domain=${domain}`, admin)).body.items[0].id;
+    const sain = await idOf('github.com');
+    const mort = await idOf('civitai.com');
+    const jamais = await idOf('example.com');
+    const at = (d) => new Date(Date.UTC(2026, 10, d, 4));
+    // Lien sain testé 12 fois, lien en quarantaine après trois 404 et un délai dépassé.
+    for (let d = 1; d <= 12; d += 1) {
+      await q(`INSERT INTO url_check (url_item_id, checked_at, http_status, verdict) VALUES ($1, $2, 200, 'ok')`, [sain, at(d)]);
+    }
+    await q('INSERT INTO url_check (url_item_id, checked_at, http_status, verdict, error) VALUES ' +
+      "($1, $2, 404, 'dead', NULL), ($1, $3, NULL, 'unsure', 'TimeoutError'), ($1, $4, 404, 'dead', NULL), ($1, $5, 404, 'dead', NULL)",
+      [mort, at(1), at(2), at(3), at(4)]);
+    await q('UPDATE url_item SET checked_at = $2 WHERE id = $1', [sain, at(12)]);
+    await q('UPDATE url_item SET checked_at = $2, dead_streak = 3, quarantined_at = $2 WHERE id = $1', [mort, at(4)]);
+
+    try {
+      const s = (await get(`/admin/urls/${sain}`, admin)).body;
+      expect(s).toMatchObject({ checked_at: at(12).toISOString(), quarantined_at: null, dead_streak: 0 });
+      expect(s.checks).toHaveLength(10);
+      expect(s.checks[0]).toEqual({ checked_at: at(12).toISOString(), http_status: 200, verdict: 'ok', error: null });
+      expect(s.checks.at(-1).checked_at).toBe(at(3).toISOString());
+
+      const m = (await get(`/admin/urls/${mort}`, admin)).body;
+      expect(m).toMatchObject({ quarantined_at: at(4).toISOString(), dead_streak: 3 });
+      expect(m.checks.map((c) => c.verdict)).toEqual(['dead', 'dead', 'unsure', 'dead']);
+      expect(m.checks[2]).toMatchObject({ http_status: null, error: 'TimeoutError' });
+
+      const j = (await get(`/admin/urls/${jamais}`, admin)).body;
+      expect(j).toMatchObject({ checked_at: null, quarantined_at: null, dead_streak: 0, checks: [] });
+
+      const inQ = (await get('/admin/urls?quarantined=true', admin)).body;
+      expect(inQ.items.map((u) => [u.id, u.quarantined_at])).toEqual([[mort, at(4).toISOString()]]);
+      const outQ = (await get('/admin/urls?quarantined=false', admin)).body;
+      expect(outQ.items.map((u) => u.id).sort()).toEqual([sain, jamais].sort());
+      expect(outQ.items.find((u) => u.id === sain).checked_at).toBe(at(12).toISOString());
+      expect((await get('/admin/urls', admin)).body.total).toBe(3);
+      expect((await get('/admin/urls?quarantined=peut-être', admin)).status).toBe(400);
+
+      expect((await get('/admin/stats', admin)).body.quarantined).toBe(1);
+    } finally {
+      await q('DELETE FROM url_check');
+      await q('UPDATE url_item SET checked_at = NULL, dead_streak = 0, quarantined_at = NULL');
+    }
+  });
+
   it('rend la taxonomie en arbre et les facettes', async () => {
     const themes = (await get('/admin/themes', admin)).body.items;
     const ia = themes.find((t) => t.slug === 'ia-generative');

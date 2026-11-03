@@ -598,9 +598,9 @@ pnpm webpool client revoke --name client-a
 | `DELETE /requests/{id}` | read | annule une recherche en attente, remboursée |
 | `GET /communities/{slug}/members`, `PUT`/`DELETE …/members/{name}` | read (propriétaires) | membres du plus gros apport au plus petit (rôle calculé, fondateur, plafond, dépense, apports, invitation acceptée) ; invitation, plafond, retrait d'un membre ; le rôle ne se donne pas |
 | `POST`/`DELETE /communities/{slug}/invitation`, `DELETE /communities/{slug}/membership` | read | accepter ou décliner une invitation (listées dans `/billing`), quitter une communauté |
-| `/admin/stats` | admin | volumes pour un tableau de bord |
+| `/admin/stats` | admin | volumes pour un tableau de bord, dont les liens en quarantaine (`quarantined`) |
 | `/admin/pools/{slug}/export?format=json\|csv\|md\|txt` | admin | export de `pool export`, définition et scores compris |
-| `/admin/urls`, `/admin/urls/{id}` | admin | corpus filtré (`status`, `theme`, `facet=slug:valeur`, `domain`, `q`, `order`) ; fiche : sources, thèmes, facettes, pools |
+| `/admin/urls`, `/admin/urls/{id}` | admin | corpus filtré (`status`, `theme`, `facet=slug:valeur`, `domain`, `q`, `quarantined`, `order`), avec `checked_at` et `quarantined_at` ; fiche : sources, thèmes, facettes, pools, contrôle (`checked_at`, `quarantined_at`, `dead_streak`, `checks` : 10 derniers tests) |
 | `/admin/themes`, `/admin/facets` | admin | taxonomie en arbre, valeurs de facettes, avec volumes |
 | `/admin/domains` | admin | registre (`to_qualify`, `excluded`, `usage`, `q`) |
 | `/admin/queries`, `/admin/runs` | admin | frontière d'exploration, historique du pipeline |

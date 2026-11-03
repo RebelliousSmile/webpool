@@ -213,7 +213,7 @@ async function exportResponse(slug, format, { client }) {
 // --- Administration : corpus, taxonomie, domaines, frontière, runs.
 
 export async function adminStats() {
-  const [base, { rows: pools }, { rows: domains }, { rows: queries }, { rows: media }] = await Promise.all([
+  const [base, { rows: pools }, { rows: domains }, { rows: queries }, { rows: media }, { rows: quarantined }] = await Promise.all([
     stats(),
     query('SELECT count(*)::int AS n FROM pool'),
     query(
@@ -228,10 +228,20 @@ export async function adminStats() {
        UNION ALL
        SELECT 'favicons', favicon_status, count(*)::int FROM domain_profile WHERE favicon_status IS NOT NULL GROUP BY favicon_status`,
     ),
+    query('SELECT count(*)::int AS n FROM url_item WHERE quarantined_at IS NOT NULL'),
   ]);
   const mediaStats = { thumbs: { pending: 0, cached: 0, failed: 0 }, favicons: { pending: 0, cached: 0, failed: 0 } };
   for (const m of media) mediaStats[m.what][m.status] = m.n;
-  return { body: { ...base, pools: pools[0].n, domain_profile: domains[0], search_query: queries, media: mediaStats } };
+  return {
+    body: {
+      ...base,
+      pools: pools[0].n,
+      quarantined: quarantined[0].n,
+      domain_profile: domains[0],
+      search_query: queries,
+      media: mediaStats,
+    },
+  };
 }
 
 export async function listUrls({ query: qs }) {
@@ -242,11 +252,13 @@ export async function listUrls({ query: qs }) {
   const domain = qs.get('domain');
   const text = qs.get('q');
   const facets = facetParams(qs);
+  const quarantined = boolParam(qs, 'quarantined');
 
   const where = [];
   const values = [];
   const $ = (v) => `$${values.push(v)}`;
   if (status) where.push(`ui.status = ${$(status)}`);
+  if (quarantined !== undefined) where.push(`ui.quarantined_at IS ${quarantined ? 'NOT ' : ''}NULL`);
   if (domain) where.push(`ui.domain = ${$(domain.toLowerCase())}`);
   if (theme) {
     where.push(
@@ -268,6 +280,7 @@ export async function listUrls({ query: qs }) {
   const { rows, total } = await selectPage({
     select: `ui.id, coalesce(ui.canonical_url, ui.raw_url) AS url, ui.domain, ui.title, ui.status,
              ui.relevance_score, ui.quality_score, ui.confidence_score, ui.first_seen_at,
+             ui.checked_at, ui.quarantined_at,
              (SELECT d.usage_commercial FROM domain_profile d WHERE d.domain = ui.domain) AS usage_commercial,
              (SELECT t.slug FROM url_theme ut JOIN theme t ON t.id = ut.theme_id
                WHERE ut.url_item_id = ui.id AND ut.is_primary) AS primary_theme,
@@ -285,6 +298,8 @@ export async function listUrls({ query: qs }) {
     quality_score: num(r.quality_score),
     confidence_score: num(r.confidence_score),
     first_seen_at: iso(r.first_seen_at),
+    checked_at: iso(r.checked_at),
+    quarantined_at: iso(r.quarantined_at),
     ...mediaFields({ ...r, thumb_file, favicon_file }, r.url),
   }));
   return { body: paged(items, total, page) };
@@ -296,6 +311,7 @@ export async function getUrl({ params }) {
     `SELECT ui.id, ui.raw_url, ui.canonical_url, ui.domain, ui.title, ui.http_status, ui.status,
             ui.duplicate_of, ui.error, ui.relevance_score, ui.confidence_score, ui.quality_score,
             ui.first_seen_at, ui.normalized_at, ui.classified_at, dp.usage_commercial,
+            ui.checked_at, ui.quarantined_at, ui.dead_streak,
             ui.description, ui.media_type, ui.lang, ui.site_name, ${THUMB_SQL}, ${FAVICON_SQL}
        FROM url_item ui LEFT JOIN domain_profile dp ON dp.domain = ui.domain
       WHERE ui.id = $1`,
@@ -303,7 +319,7 @@ export async function getUrl({ params }) {
   );
   if (rows.length === 0) throw notFound(`URL inconnue : ${id}`);
   const { thumb_file, favicon_file, ...r } = rows[0];
-  const [{ rows: sources }, { rows: themes }, { rows: facets }, { rows: pools }] = await Promise.all([
+  const [{ rows: sources }, { rows: themes }, { rows: facets }, { rows: pools }, { rows: checks }] = await Promise.all([
     query(
       `SELECT provider, query, serp_rank, discovered_at FROM url_source
         WHERE url_item_id = $1 ORDER BY discovered_at, id`,
@@ -326,6 +342,11 @@ export async function getUrl({ params }) {
         WHERE pi.url_item_id = $1 ORDER BY p.slug`,
       [id],
     ),
+    query(
+      `SELECT checked_at, http_status, verdict, error FROM url_check
+        WHERE url_item_id = $1 ORDER BY checked_at DESC, id DESC LIMIT 10`,
+      [id],
+    ),
   ]);
   return {
     body: {
@@ -338,11 +359,14 @@ export async function getUrl({ params }) {
       first_seen_at: iso(r.first_seen_at),
       normalized_at: iso(r.normalized_at),
       classified_at: iso(r.classified_at),
+      checked_at: iso(r.checked_at),
+      quarantined_at: iso(r.quarantined_at),
       ...mediaFields({ ...r, thumb_file, favicon_file }, r.canonical_url ?? r.raw_url),
       sources: sources.map((s) => ({ ...s, discovered_at: iso(s.discovered_at) })),
       themes: themes.map((t) => ({ ...t, score: num(t.score) })),
       facets,
       pools,
+      checks: checks.map((c) => ({ ...c, checked_at: iso(c.checked_at) })),
     },
   };
 }
