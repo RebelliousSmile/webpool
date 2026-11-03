@@ -42,7 +42,7 @@ export async function refreshPool(slug) {
 
   await assertKnownFacets(pool.definition);
   return withRun('pool', { slug }, async (runId) => {
-    const { text, values } = buildPoolQuery(pool.definition);
+    const { text, values } = buildPoolQuery(pool.definition, { poolId: pool.id });
     const { rows: selected } = await query(text, values);
 
     await withTransaction(async (client) => {
@@ -66,11 +66,18 @@ export async function refreshPool(slug) {
 
 export async function listPools() {
   const { rows } = await query(
-    `SELECT p.slug, p.label, p.refreshed_at, count(pi.url_item_id)::int AS items
+    `SELECT p.slug, p.label, p.public, p.refreshed_at, count(pi.url_item_id)::int AS items
        FROM pool p LEFT JOIN pool_item pi ON pi.pool_id = p.id
       GROUP BY p.id ORDER BY p.slug`,
   );
   return rows;
+}
+
+// Pool public : visible et exportable par tout client authentifié, gratuitement.
+export async function setPoolPublic(slug, isPublic) {
+  const { rowCount } = await query('UPDATE pool SET public = $2 WHERE slug = $1', [slug, isPublic]);
+  if (rowCount === 0) throw new Error(`Pool inconnu : ${slug}`);
+  return { slug, public: isPublic };
 }
 
 export async function showPool(slug) {

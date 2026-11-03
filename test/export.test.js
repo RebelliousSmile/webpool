@@ -47,13 +47,54 @@ describe('export de pool', () => {
 
   it('Markdown : tableau lié, pipes et parenthèses échappés', () => {
     const md = toMarkdown({ ...data, items: [{ ...data.items[1], title: 'a|b' }] });
-    expect(md).toContain('[a\\|b](https://b.com/(y%29)');
+    expect(md).toContain('[a\\|b](https://b.com/%28y%29)');
     expect(md).toContain('# Mon pool');
+  });
+
+  it('Markdown : un antislash du titre ne referme pas le lien', () => {
+    const title = 'Doc\\](https://evil.example/phish) [suite';
+    const md = toMarkdown({ ...data, items: [{ ...data.items[0], title }] });
+    const line = md.split('\n').find((l) => l.startsWith('| 1 |'));
+    expect(line).toBe('| 1 | [Doc\\\\\\]\\(https://evil.example/phish\\) \\[suite](https://a.com/x) | a.com | 0.900 |');
+    // Seul « ]( » non échappé : celui du vrai lien.
+    expect(line.match(/(?<!\\)\]\(/g)).toHaveLength(1);
+  });
+
+  it.each([
+    ['\\', '\\\\'],
+    ['[', '\\['],
+    [']', '\\]'],
+    ['(', '\\('],
+    [')', '\\)'],
+    ['|', '\\|'],
+    ['*', '\\*'],
+    ['_', '\\_'],
+    ['`', '\\`'],
+    ['!', '\\!'],
+    ['<', '&lt;'],
+    ['>', '&gt;'],
+    ['&', '&amp;'],
+  ])('Markdown : %s est échappé dans le titre et les cellules', (c, escaped) => {
+    const md = toMarkdown({
+      pool: { ...data.pool, label: `L${c}` },
+      items: [{ ...data.items[0], title: `a${c}b`, domain: `d${c}.com` }],
+    });
+    expect(md).toContain(`# L${escaped}\n`);
+    expect(md).toContain(`[a${escaped}b](https://a.com/x) | d${escaped}.com |`);
+  });
+
+  it('Markdown : image et mise en forme neutralisées, URL encodée', () => {
+    const md = toMarkdown({
+      ...data,
+      items: [{ ...data.items[0], title: '![x](https://t.example/p.gif) **gras** _i_', canonical_url: 'https://a.com/a b|c<d>\\e' }],
+    });
+    expect(md).toContain('[\\!\\[x\\]\\(https://t.example/p.gif\\) \\*\\*gras\\*\\* \\_i\\_](https://a.com/a%20b%7Cc%3Cd%3E%5Ce)');
   });
 
   it('Markdown : le HTML des titres est échappé', () => {
     const md = toMarkdown({ ...data, items: [{ ...data.items[0], title: '<script>x</script> & co' }] });
     expect(md).toContain('[&lt;script&gt;x&lt;/script&gt; &amp; co](https://a.com/x)');
+    expect(md).not.toMatch(/[<>]/);
     expect(md).not.toContain('<script>');
   });
 

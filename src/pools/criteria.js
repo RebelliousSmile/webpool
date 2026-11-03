@@ -11,7 +11,8 @@
 //   "domains_exclude": ["pinterest.com"],
 //   "domains_include": [],               // si non vide : liste blanche
 //   "order": "quality",                  // quality | relevance | recent | composite | rarity
-//   "limit": 50
+//   "limit": 50,
+//   "include_requests": true             // + URLs des recherches de ses communautés, hors critères de sujet
 // }
 
 // Rareté : 1 / sqrt(URLs vivantes du domaine) ; une URL d'un domaine unique vaut 1.
@@ -43,7 +44,7 @@ const JOINS = {
 
 const KNOWN_KEYS = new Set([
   'theme', 'subthemes', 'facets', 'min_relevance', 'min_quality',
-  'domains_include', 'domains_exclude', 'order', 'limit',
+  'domains_include', 'domains_exclude', 'order', 'limit', 'include_requests',
 ]);
 
 const isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
@@ -61,6 +62,7 @@ const CHECKS = {
   min_quality: [isUnitNumber, 'un nombre entre 0 et 1'],
   order: [(v) => typeof v === 'string', 'une chaîne'],
   limit: [Number.isInteger, 'un entier'],
+  include_requests: [(v) => typeof v === 'boolean', 'un booléen'],
 };
 
 // Une définition vient d'un fichier JSON : chaque critère est typé avant de
@@ -78,7 +80,12 @@ function validateDefinition(definition) {
   }
 }
 
-export function buildPoolQuery(definition) {
+// `poolId` sert au critère include_requests : une URL trouvée par une recherche
+// payée par une communauté propriétaire du pool, et qui le vise, y entre dès
+// qu'elle est classée, sans remplir les critères de sujet (theme, subthemes,
+// facets, domains_include), après la sélection normale ; les seuils
+// min_relevance et min_quality et domains_exclude s'appliquent toujours.
+export function buildPoolQuery(definition, { poolId = null } = {}) {
   validateDefinition(definition);
   const order = definition.order ?? 'composite';
   if (!Object.hasOwn(ORDERS, order)) {
@@ -86,7 +93,7 @@ export function buildPoolQuery(definition) {
   }
 
   const values = [];
-  const where = ["ui.status = 'classified'"];
+  const where = [];
   const add = (value) => {
     values.push(value);
     return `$${values.length}`;
@@ -110,27 +117,62 @@ export function buildPoolQuery(definition) {
                WHERE ufv.url_item_id = ui.id AND fd.slug = ${add(facetSlug)} AND ufv.value = ${add(value)})`,
     );
   }
-  if (definition.min_relevance != null) {
-    where.push(`ui.relevance_score >= ${add(definition.min_relevance)}`);
-  }
-  if (definition.min_quality != null) {
-    where.push(`ui.quality_score >= ${add(definition.min_quality)}`);
-  }
   if (definition.domains_include?.length) {
     where.push(`ui.domain = ANY(${add(definition.domains_include)})`);
   }
-  if (definition.domains_exclude?.length) {
-    where.push(`NOT (ui.domain = ANY(${add(definition.domains_exclude)}))`);
+  // Seuils de qualité : jamais contournés, même par include_requests.
+  const thresholds = [];
+  if (definition.min_relevance != null) {
+    thresholds.push(`ui.relevance_score >= ${add(definition.min_relevance)}`);
   }
-
+  if (definition.min_quality != null) {
+    thresholds.push(`ui.quality_score >= ${add(definition.min_quality)}`);
+  }
+  // Toujours appliqués : classée, seuils de qualité, domaines exclus.
+  const always = ["ui.status = 'classified'", ...thresholds];
+  if (definition.domains_exclude?.length) {
+    always.push(`NOT (ui.domain = ANY(${add(definition.domains_exclude)}))`);
+  }
   const limit = Math.max(1, Math.min(1000, definition.limit ?? 100));
-  const text =
-    `SELECT ui.id, ui.canonical_url, ui.domain, ${SCORE_EXPR[order]} AS pool_score\n` +
+  const limitParam = add(limit);
+  const select = (conds, rank) =>
+    `SELECT ui.id, ui.canonical_url, ui.domain, ${SCORE_EXPR[order]} AS pool_score,\n` +
+    `       row_number() OVER (ORDER BY ${ORDERS[order]}, ui.id) AS ${rank}\n` +
     `  FROM url_item ui\n` +
     (JOINS[order] ?? '') +
-    ` WHERE ${where.join('\n   AND ')}\n` +
+    ` WHERE ${conds.join('\n   AND ')}\n` +
     ` ORDER BY ${ORDERS[order]}, ui.id\n` +
-    ` LIMIT ${add(limit)}`;
+    ` LIMIT ${limitParam}`;
 
+  // Sans critère de sujet, le pool prend déjà toutes les URLs classées.
+  if (!(definition.include_requests && poolId !== null && where.length)) {
+    const text =
+      `SELECT ui.id, ui.canonical_url, ui.domain, ${SCORE_EXPR[order]} AS pool_score\n` +
+      `  FROM url_item ui\n` +
+      (JOINS[order] ?? '') +
+      ` WHERE ${[...always, ...where].join('\n   AND ')}\n` +
+      ` ORDER BY ${ORDERS[order]}, ui.id\n` +
+      ` LIMIT ${limitParam}`;
+    return { text, values };
+  }
+
+  // include_requests : la sélection normale (au plus `limit`), puis, après
+  // elle, les URLs des recherches payées par une communauté propriétaire du
+  // pool qui n'y sont pas déjà (au plus `limit` de plus). Une recherche payée
+  // ne dispute donc pas sa place à la sélection, et un client qui paie sur son
+  // portefeuille personnel n'y injecte rien. IN (sous-requête) plutôt qu'un
+  // OR EXISTS : PostgreSQL en fait une semi-jointure indexée.
+  const requested =
+    `ui.id IN (SELECT us.url_item_id FROM url_source us\n` +
+    `                 JOIN search_request sr ON sr.id = us.search_request_id\n` +
+    `                 JOIN wallet w ON w.id = sr.wallet_id\n` +
+    `                 JOIN community_pool cp ON cp.community_id = w.community_id AND cp.pool_id = sr.pool_id\n` +
+    `                WHERE sr.pool_id = ${add(poolId)})`;
+  const text =
+    `WITH base AS (\n${select([...always, ...where], 'rn')}\n),\n` +
+    `extra AS (\n${select([...always, requested, 'ui.id NOT IN (SELECT id FROM base)'], 'rn')}\n)\n` +
+    `SELECT id, canonical_url, domain, pool_score FROM (\n` +
+    `  SELECT *, 1 AS part FROM base UNION ALL SELECT *, 2 AS part FROM extra\n` +
+    `) t ORDER BY part, rn`;
   return { text, values };
 }

@@ -48,6 +48,14 @@ async function normalizeOne(item, runId, page) {
   const preview = meta.image ?? (page && mediaType === 'image' && /^image\//i.test(contentType ?? '') ? finalUrl : null);
 
   return withTransaction(async (client) => {
+    // Réservation : une autre exécution (cycle, requests run, normalize à la
+    // main) a pu traiter l'URL entre la sélection et l'écriture ; on ne
+    // réécrit jamais une URL qui n'est plus en attente.
+    const { rows: current } = await client.query(
+      "SELECT 1 FROM url_item WHERE id = $1 AND status = 'pending' FOR UPDATE",
+      [item.id],
+    );
+    if (current.length === 0) return 'skipped';
     // Une redirection peut mener à un domaine que l'ingestion n'a pas vu.
     const { rows: first } = await client.query(
       'SELECT query FROM url_source WHERE url_item_id = $1 ORDER BY discovered_at, id LIMIT 1',
@@ -127,6 +135,8 @@ async function normalizeOne(item, runId, page) {
 export async function normalizePending({
   limit = 100,
   offline = false,
+  // limite le lot à ces URLs (requests run : celles de ses recherches)
+  ids = null,
   concurrency = config.concurrency,
   chunkSize = config.normalizeChunk,
   fetchImpl,
@@ -135,10 +145,12 @@ export async function normalizePending({
   ),
 } = {}) {
   return withRun('normalize', { limit, offline, concurrency }, async (runId) => {
-    const counts = { normalized: 0, duplicate: 0, error: 0 };
+    const counts = { normalized: 0, duplicate: 0, error: 0, skipped: 0 };
     const { rows: items } = await query(
-      "SELECT id, raw_url, title FROM url_item WHERE status = 'pending' ORDER BY id LIMIT $1",
-      [limit],
+      `SELECT id, raw_url, title FROM url_item
+        WHERE status = 'pending' AND ($2::bigint[] IS NULL OR id = ANY($2))
+        ORDER BY id LIMIT $1`,
+      [limit, ids],
     );
 
     for (let start = 0; start < items.length; start += chunkSize) {
@@ -155,7 +167,8 @@ export async function normalizePending({
         } catch (err) {
           counts.error += 1;
           await query(
-            `UPDATE url_item SET status = 'error', error = $2, http_status = $3, normalize_run_id = $4 WHERE id = $1`,
+            `UPDATE url_item SET status = 'error', error = $2, http_status = $3, normalize_run_id = $4
+              WHERE id = $1 AND status = 'pending'`,
             [item.id, String(err.message ?? err).slice(0, 500), err.httpStatus ?? null, runId],
           );
         }

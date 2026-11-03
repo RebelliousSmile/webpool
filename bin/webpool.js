@@ -6,7 +6,7 @@ import { ingest } from '../src/ingest/index.js';
 import { normalizePending } from '../src/normalize/index.js';
 import { classifyPending } from '../src/classify/index.js';
 import fs from 'node:fs';
-import { createPool, refreshPool, listPools, showPool, loadPoolForExport } from '../src/pools/index.js';
+import { createPool, refreshPool, listPools, showPool, loadPoolForExport, setPoolPublic } from '../src/pools/index.js';
 import { formatPool } from '../src/pools/export.js';
 import { stats } from '../src/stats.js';
 import { assertUsage, listDomains, qualifyDomain, setExploreExcluded } from '../src/domains/index.js';
@@ -15,6 +15,13 @@ import { cycle } from '../src/cycle/index.js';
 import { cacheMedia } from '../src/media/index.js';
 import { addClient, listClients, revokeClient, setPoolAccess } from '../src/api/clients.js';
 import { config } from '../src/config.js';
+import { withPipelineLock } from '../src/lock.js';
+import {
+  addCommunity, adjust, billingReport, credit, currentPrices, listCommunities, removeMember,
+  setCommunityPool, setMember, walletEntries, walletOf,
+} from '../src/billing/index.js';
+import { eurosOf, parseEuros } from '../src/billing/pricing.js';
+import { REQUEST_STATUSES, cancelRequest, listRequests, runRequests } from '../src/requests/index.js';
 
 const HELP = `webpool — pipeline d'URLs : ingestion, normalisation, classification, pools
 
@@ -27,6 +34,7 @@ Usage :
   webpool pool show --slug <slug>
   webpool pool export --slug <slug> [--format json|csv|md|txt] [--out fichier]
   webpool pool list
+  webpool pool publish|unpublish --slug <slug>   (pool public : visible par tout client, sans accord)
   webpool domain list [--to-qualify] [--limit N]
   webpool domain set --domain <domaine> --usage libre|sous-conditions|payant|non-commercial [--note "…"]
   webpool domain exclude --domain <domaine>   (écarté des requêtes Brave par -site:, en plus des domaines saturés)
@@ -38,12 +46,28 @@ Usage :
   webpool explore --budget N [--provider p] [--limit N]   (au plus N appels aux providers, ceux du tuyau courant d'abord)
   webpool media [--limit N] [--retry-failed]   (vignettes et favicons en attente : téléchargés, réduits en WebP, mis en cache)
   webpool cycle --budget N [--provider p] [--offline]   (explore, normalize, classify et media jusqu'à vider la file, refresh des pools)
-  webpool serve [--port N] [--host h]   (API HTTP en lecture seule, voir openapi.json)
+  webpool serve [--port N] [--host h]   (API HTTP, voir openapi.json)
   webpool client add --name <nom> [--scope admin|read]   (affiche le jeton une seule fois)
   webpool client list
   webpool client revoke --name <nom>
   webpool client grant --name <nom> --slug <pool>   (client read : accès au pool)
   webpool client ungrant --name <nom> --slug <pool>
+  webpool community add --slug <slug> [--label "…"]
+  webpool community list
+  webpool community join --slug <communauté> --name <client> [--role owner|member] [--monthly N|none]
+                                          (membre actif ; --role owner : fondateur, propriétaire tant que personne n'a versé au pot ;
+                                           ensuite le propriétaire est le plus gros apport ; plafond en giri sur 30 jours, option absente : inchangée)
+  webpool community leave --slug <communauté> --name <client>
+  webpool community attach|detach --slug <communauté> --pool <pool>   (pools visibles par les membres, payables par la communauté)
+  webpool wallet credit (--name <client> | --community <slug> [--by <membre>]) --eur 12,50 --ref <paiement> [--note "…"] [--force]
+                                          (don personnel, ou apport au pot de la communauté au nom d'un membre ; --force sous le minimum)
+  webpool wallet adjust (--name <client> | --community <slug>) --giri=±N --note "…"   (ex. --giri=-50)
+  webpool wallet show (--name <client> | --community <slug>)
+  webpool pricing                          (prix d'un appel par provider, en giri et en €)
+  webpool requests run [--limit N] [--offline]   (recherches payées en attente, puis normalize, classify, media, refresh des pools visés)
+  webpool requests list [--status queued|running|done|failed|cancelled]
+  webpool requests cancel --id N           (recherche en attente, remboursée)
+  webpool billing report [--days N]        (giri crédités et dépensés, coût des providers, marge)
   webpool stats
   webpool migrate                         (applique les migrations db/migrations manquantes)
 `;
@@ -73,8 +97,29 @@ const OPTIONS = {
   scope: { type: 'string', default: 'read' },
   port: { type: 'string' },
   host: { type: 'string' },
+  community: { type: 'string' },
+  pool: { type: 'string' },
+  role: { type: 'string' },
+  monthly: { type: 'string' },
+  eur: { type: 'string' },
+  ref: { type: 'string' },
+  giri: { type: 'string' },
+  id: { type: 'string' },
+  days: { type: 'string' },
+  by: { type: 'string' },
   help: { type: 'boolean', short: 'h', default: false },
 };
+
+// normalize et classify à la main prennent le verrou du pipeline : jamais en
+// même temps que cycle ou requests run, qui traitent la même file.
+async function pipelineLocked(name, fn) {
+  const res = await withPipelineLock(fn);
+  if (res === null) throw new Error(`${name} : cycle ou requests run en cours, réessayer après`);
+  return res;
+}
+
+const giriEur = (giri) => `${eurosOf(giri, config.giriPerEur).toFixed(3).replace('.', ',')} €`;
+const walletOwner = (values) => ({ name: values.name, community: values.community });
 
 // Valide avant toute connexion à la base.
 function parsePositive(name, raw) {
@@ -111,14 +156,14 @@ async function main() {
       break;
     }
     case 'normalize': {
-      const res = await normalizePending({ limit, offline: values.offline });
+      const res = await pipelineLocked('normalize', () => normalizePending({ limit, offline: values.offline }));
       console.log(
         `Normalize run #${res.runId} : ${res.normalized} normalisées, ${res.duplicate} doublons, ${res.error} erreurs (sur ${res.total}).`,
       );
       break;
     }
     case 'classify': {
-      const res = await classifyPending({ limit, reclassify: values.all });
+      const res = await pipelineLocked('classify', () => classifyPending({ limit, reclassify: values.all }));
       console.log(
         `Classify run #${res.runId} : ${res.classified} classées, dont ${res.unthemed} sans thème.`,
       );
@@ -146,10 +191,14 @@ async function main() {
         const output = formatPool(await loadPoolForExport(values.slug), values.format);
         if (values.out) fs.writeFileSync(values.out, output);
         else process.stdout.write(output);
+      } else if (subcommand === 'publish' || subcommand === 'unpublish') {
+        if (!values.slug) throw new Error(`pool ${subcommand} : --slug requis`);
+        await setPoolPublic(values.slug, subcommand === 'publish');
+        console.log(`Pool "${values.slug}" ${subcommand === 'publish' ? 'public : visible par tout client' : 'réservé aux clients autorisés'}.`);
       } else if (subcommand === 'list') {
         const pools = await listPools();
         for (const p of pools) {
-          console.log(`${p.slug}  (${p.items} URLs, refresh: ${p.refreshed_at ?? 'jamais'})  ${p.label}`);
+          console.log(`${p.slug}  (${p.items} URLs, refresh: ${p.refreshed_at ?? 'jamais'})${p.public ? ' [public]' : ''}  ${p.label}`);
         }
         if (pools.length === 0) console.log('(aucun pool)');
       } else {
@@ -302,6 +351,126 @@ async function main() {
         );
       } finally {
         client.release();
+      }
+      break;
+    }
+    case 'community': {
+      if (subcommand === 'add') {
+        if (!values.slug) throw new Error('community add : --slug requis');
+        await addCommunity({ slug: values.slug, label: values.label });
+        console.log(`Communauté "${values.slug}" créée.`);
+      } else if (subcommand === 'list') {
+        const rows = await listCommunities();
+        for (const c of rows) {
+          console.log(`${c.slug.padEnd(20)} ${String(c.balance).padStart(8)} giri  membres : ${c.members.join(', ') || '(aucun)'}  pools : ${c.pools.join(', ') || '(aucun)'}`);
+        }
+        if (rows.length === 0) console.log('(aucune communauté)');
+      } else if (subcommand === 'join') {
+        if (!values.slug || !values.name) throw new Error('community join : --slug et --name requis');
+        // --monthly absent : plafond gardé ; « none » : sans plafond ; 0 bloque la dépense
+        let monthlyLimit;
+        if (values.monthly === 'none') monthlyLimit = null;
+        else if (values.monthly !== undefined) {
+          if (!/^\d+$/.test(values.monthly)) throw new Error(`--monthly doit être un entier ≥ 0 ou none (reçu : "${values.monthly}")`);
+          monthlyLimit = Number(values.monthly);
+        }
+        const m = await setMember({ community: values.slug, name: values.name, role: values.role, monthlyLimit });
+        console.log(`"${values.name}" membre${m.role === 'owner' ? ' fondateur' : ''} de "${values.slug}", ${m.monthlyLimit === null ? 'sans plafond' : `plafond ${m.monthlyLimit} giri / 30 jours`}.`);
+      } else if (subcommand === 'leave') {
+        if (!values.slug || !values.name) throw new Error('community leave : --slug et --name requis');
+        await removeMember({ community: values.slug, name: values.name });
+        console.log(`"${values.name}" n'est plus membre de "${values.slug}".`);
+      } else if (subcommand === 'attach' || subcommand === 'detach') {
+        if (!values.slug || !values.pool) throw new Error(`community ${subcommand} : --slug et --pool requis`);
+        await setCommunityPool({ community: values.slug, pool: values.pool, attached: subcommand === 'attach' });
+        console.log(`Pool "${values.pool}" ${subcommand === 'attach' ? 'rattaché à' : 'détaché de'} "${values.slug}".`);
+      } else {
+        throw new Error(`Sous-commande community inconnue : ${subcommand ?? '(aucune)'}`);
+      }
+      break;
+    }
+    case 'wallet': {
+      if (subcommand === 'credit') {
+        if (!values.eur) throw new Error('wallet credit : --eur requis');
+        const cents = parseEuros(values.eur);
+        const res = await credit({
+          ...walletOwner(values), contributor: values.by, cents, reference: values.ref, note: values.note, force: values.force,
+        });
+        const what = res.kind === 'donation' ? 'Don' : `Apport à la communauté${values.by ? ` par ${values.by}` : ''}`;
+        console.log(`${what} de ${(cents / 100).toFixed(2).replace('.', ',')} € : +${res.giri} giri, solde ${res.balance} giri.`);
+      } else if (subcommand === 'adjust') {
+        if (!/^[+-]?\d+$/.test(values.giri ?? '')) throw new Error('wallet adjust : --giri entier requis (ex. --giri=-50)');
+        const res = await adjust({ ...walletOwner(values), giri: Number(values.giri), note: values.note });
+        console.log(`Correction de ${res.giri} giri, solde ${res.balance} giri.`);
+      } else if (subcommand === 'show') {
+        const wallet = await walletOf(walletOwner(values));
+        console.log(`Solde : ${wallet.balance} giri (${giriEur(wallet.balance)})`);
+        const { items } = await walletEntries({ walletId: wallet.id, limit: limit ?? 20 });
+        for (const e of items) {
+          const sign = e.delta > 0 ? `+${e.delta}` : String(e.delta);
+          console.log(`${e.created_at.toISOString().slice(0, 16)}  ${sign.padStart(8)}  ${e.kind.padEnd(10)} ${e.search_request_id ? `#${e.search_request_id} ` : ''}${e.reference ?? ''}${e.client ? ` (${e.client})` : ''}${e.note ? ` — ${e.note}` : ''}`);
+        }
+      } else {
+        throw new Error(`Sous-commande wallet inconnue : ${subcommand ?? '(aucune)'}`);
+      }
+      break;
+    }
+    case 'pricing': {
+      const prices = currentPrices();
+      console.log(`1 € = ${config.giriPerEur} giri ; majoration ×${config.priceMarkup} ; 1 $ = ${config.usdEur} €`);
+      for (const p of prices) {
+        console.log(`${p.provider.padEnd(12)} ${String(p.unit_price).padStart(5)} giri l'appel (${giriEur(p.unit_price)}, coût ${p.cost_usd} $), ${p.max_pages} page(s) au plus`);
+      }
+      if (prices.length === 0) console.log('(aucun provider ouvert : WEBPOOL_REQUEST_PROVIDERS)');
+      break;
+    }
+    case 'requests': {
+      if (subcommand === 'run') {
+        const res = await runRequests({ limit: limit ?? 10, offline: values.offline });
+        if (res === null) {
+          console.log('cycle ou requests run en cours : rien à faire ce tour-ci.');
+          break;
+        }
+        if (res.recovered) console.log(`${res.recovered} recherche(s) interrompue(s) close(s).`);
+        for (const r of res.requests) {
+          console.log(`#${r.id} : ${r.calls} appel(s), ${r.newUrls} URLs nouvelles${r.refunded ? `, ${r.refunded} giri remboursés` : ''}${r.error ? ` ; erreur : ${r.error}` : ''}`);
+        }
+        if (res.requests.length === 0) console.log('Aucune recherche en attente.');
+        if (res.processed.length) {
+          console.log(`Post-traitement de ${res.processed.length} recherche(s) :`);
+          for (const step of res.steps) console.log(`  ${step.name.padEnd(9)} ${step.ok ? 'ok' : 'ÉCHEC'}  ${step.line}`);
+          if (!res.ok) console.log('  repris au prochain requests run.');
+        }
+        // Code 1 : toutes les recherches en échec, ou post-traitement à reprendre.
+        if ((res.requests.length > 0 && res.requests.every((r) => r.error)) || !res.ok) process.exitCode = 1;
+      } else if (subcommand === 'list') {
+        const status = values.status;
+        if (status && !REQUEST_STATUSES.includes(status)) throw new Error(`--status invalide : ${status} (attendu : ${REQUEST_STATUSES.join(', ')})`);
+        const { items } = await listRequests({ status, limit: limit ?? 50 });
+        for (const r of items) {
+          console.log(`#${String(r.id).padEnd(5)} ${r.status.padEnd(9)} ${r.client.padEnd(16)} ${r.provider.padEnd(10)} ${String(r.price - r.refunded).padStart(5)} giri  ${r.community ? `[${r.community}] ` : ''}${r.pool ? `→ ${r.pool} ` : ''}« ${r.query} »`);
+        }
+        if (items.length === 0) console.log('(aucune recherche)');
+      } else if (subcommand === 'cancel') {
+        const id = parsePositive('id', values.id);
+        if (!id) throw new Error('requests cancel : --id requis');
+        const res = await cancelRequest({ id, isAdmin: true });
+        console.log(`Recherche #${id} annulée, ${res.refunded} giri remboursés.`);
+      } else {
+        throw new Error(`Sous-commande requests inconnue : ${subcommand ?? '(aucune)'}`);
+      }
+      break;
+    }
+    case 'billing': {
+      if (subcommand !== 'report') throw new Error(`Sous-commande billing inconnue : ${subcommand ?? '(aucune)'}`);
+      const days = parsePositive('days', values.days) ?? 30;
+      const r = await billingReport({ days });
+      console.log(`Sur ${days} jours :`);
+      for (const c of r.credits) console.log(`  ${c.kind === 'donation' ? 'dons  ' : 'apports'} : ${c.entries}, ${c.eur.toFixed(2)} €, ${c.giri} giri`);
+      if (r.credits.length === 0) console.log('  aucun crédit');
+      console.log(`  encours : ${r.outstanding.personal} giri personnels, ${r.outstanding.communities} giri de communautés (${r.outstanding.eur.toFixed(2)} €)`);
+      for (const p of r.providers) {
+        console.log(`  ${p.provider.padEnd(10)} ${p.requests} recherches, ${p.calls} appels, ${p.giri} giri (${p.revenue_eur.toFixed(2)} €), coût ${p.cost_usd.toFixed(4)} $, marge ${p.margin_eur.toFixed(2)} €`);
       }
       break;
     }

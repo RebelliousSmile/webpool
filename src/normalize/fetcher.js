@@ -1,8 +1,11 @@
 // US-10 — récupération de pages polie : délai par hôte, retry borné avec
 // backoff, lecture du corps limitée, concurrence bornée entre hôtes.
 // `fetchImpl`, `lookup`, `sleep` et `now` sont injectables pour les tests.
+// Les requêtes passent par un dispatcher undici dont la résolution DNS applique
+// la garde d'hôte à la connexion (contre le DNS rebinding).
+import { Agent, fetch as undiciFetch } from 'undici';
 import { config } from '../config.js';
-import { assertPublicHost } from './hostGuard.js';
+import { HostRefusedError, assertPublicHost, createConnectLookup } from './hostGuard.js';
 
 const sleepReal = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const MAX_RETRY_AFTER_MS = 10_000;
@@ -92,6 +95,20 @@ export async function readBytes(res, maxBytes) {
   return Buffer.concat(chunks);
 }
 
+// Agent undici partagé par un fetcher : chaque connexion résout l'hôte et
+// refuse une adresse non publique, puis se connecte à l'adresse jugée.
+export function guardedAgent(lookup) {
+  return new Agent({ connect: { lookup: createConnectLookup(lookup ? { lookup } : {}) } });
+}
+
+// fetch enveloppe l'erreur de connexion (« fetch failed ») : le refus de la
+// garde remonte tel quel, non rejouable.
+function unwrapRefusal(err) {
+  let cause = err;
+  while (cause && !(cause instanceof HostRefusedError)) cause = cause.cause;
+  throw cause ?? err;
+}
+
 export function createFetcher({
   perHostDelayMs = config.hostDelayMs,
   retries = config.fetchRetries,
@@ -100,8 +117,10 @@ export function createFetcher({
   timeoutMs = config.fetchTimeoutMs,
   maxRedirects = config.maxRedirects,
   allowPrivateHosts = config.allowPrivateHosts,
-  fetchImpl = fetch,
+  fetchImpl = undiciFetch,
   lookup,
+  // dispatcher undici ; par défaut, un Agent dont la connexion passe la garde d'hôte
+  dispatcher = allowPrivateHosts ? undefined : guardedAgent(lookup),
   sleep = sleepReal,
   now = Date.now,
   // (res, maxBodyBytes) → objet fusionné dans le résultat ; `accept` : en-tête Accept
@@ -131,7 +150,8 @@ export function createFetcher({
         redirect: 'manual',
         headers: { 'User-Agent': config.userAgent, Accept: accept },
         signal: AbortSignal.timeout(timeoutMs),
-      });
+        ...(dispatcher ? { dispatcher } : {}),
+      }).catch(unwrapRefusal);
       const location = REDIRECT_STATUSES.has(res.status) ? res.headers.get('location') : null;
       if (!location) return { res, url };
       await res.body?.cancel?.().catch(() => {});

@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import http from 'node:http';
+import { Agent, fetch as undiciFetch } from 'undici';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createImageFetcher } from '../src/media/index.js';
 import { createFetcher, isTransientStatus, mapLimit, readHead } from '../src/normalize/fetcher.js';
+import { createConnectLookup } from '../src/normalize/hostGuard.js';
 
 const html = (body, status = 200, headers = {}) =>
   new Response(body, { status, headers: { 'content-type': 'text/html', ...headers } });
@@ -174,6 +178,117 @@ describe('fetcher — garde d’hôte', () => {
     const { fetcher, calls } = harness([html('ok')], { allowPrivateHosts: true });
     expect((await fetcher('http://127.0.0.1/')).httpStatus).toBe(200);
     expect(calls).toHaveLength(1);
+  });
+});
+
+// Résolution qui change entre la garde et la connexion : publique au premier
+// appel, puis la boucle locale.
+function rebindingLookup() {
+  const answers = ['93.184.216.34', '127.0.0.1'];
+  const seen = [];
+  const lookup = async (host) => {
+    const address = answers[Math.min(seen.length, answers.length - 1)];
+    seen.push({ host, address });
+    return [{ address, family: 4 }];
+  };
+  return { lookup, seen };
+}
+
+describe('fetcher — DNS rebinding (garde à la connexion)', () => {
+  // Serveur local joignable : si la garde laissait passer, la requête y arriverait.
+  let server;
+  let port;
+  let hits = 0;
+  beforeAll(async () => {
+    server = http.createServer((req, res) => {
+      hits += 1;
+      res.writeHead(200, { 'content-type': 'text/html' }).end('<title>interne</title>');
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    ({ port } = server.address());
+  });
+  afterAll(() => new Promise((resolve) => server.close(resolve)));
+
+  it('refuse la connexion quand le nom se résout ensuite en 127.0.0.1', async () => {
+    const { lookup, seen } = rebindingLookup();
+    const before = hits;
+    const fetcher = createFetcher({ lookup, retries: 0, perHostDelayMs: 0, allowPrivateHosts: false });
+    await expect(fetcher(`http://rebind.example:${port}/`)).rejects.toThrow(/hôte refusé : rebind\.example \(127\.0\.0\.1\)/);
+    expect(seen.map((s) => s.address)).toEqual(['93.184.216.34', '127.0.0.1']);
+    expect(hits).toBe(before);
+  });
+
+  it("l'erreur de refus n'est pas rejouée", async () => {
+    const { lookup, seen } = rebindingLookup();
+    const fetcher = createFetcher({ lookup, retries: 3, perHostDelayMs: 0, backoffMs: 0, allowPrivateHosts: false });
+    await expect(fetcher(`http://rebind.example:${port}/`)).rejects.toMatchObject({ retryable: false });
+    expect(seen).toHaveLength(2);
+  });
+
+  it('applique la même garde au téléchargement des médias', async () => {
+    const { lookup } = rebindingLookup();
+    const before = hits;
+    const fetcher = createImageFetcher({ lookup, retries: 0, perHostDelayMs: 0, allowPrivateHosts: false });
+    await expect(fetcher(`http://rebind.example:${port}/a.png`)).rejects.toThrow(/hôte refusé/);
+    expect(hits).toBe(before);
+  });
+
+  it("se connecte à l'adresse jugée par le lookup, pas à une nouvelle résolution", async () => {
+    const lookup = async () => [{ address: '127.0.0.1', family: 4 }];
+    const dispatcher = new Agent({ connect: { lookup: createConnectLookup({ lookup, isBlocked: () => false }) } });
+    try {
+      const res = await undiciFetch(`http://pinned.invalid:${port}/`, { dispatcher });
+      expect(await res.text()).toContain('interne');
+    } finally {
+      await dispatcher.close();
+    }
+  });
+
+  it('WEBPOOL_ALLOW_PRIVATE_HOSTS : ni garde ni dispatcher gardé', async () => {
+    const fetcher = createFetcher({ retries: 0, perHostDelayMs: 0, allowPrivateHosts: true });
+    expect((await fetcher(`http://127.0.0.1:${port}/`)).html).toContain('interne');
+  });
+});
+
+describe('createConnectLookup', () => {
+  const call = (fn, host, options) =>
+    new Promise((resolve) => fn(host, options, (err, address, family) => resolve({ err, address, family })));
+
+  it('rend une adresse seule, ou la liste si all', async () => {
+    const fn = createConnectLookup({
+      lookup: async () => [
+        { address: '93.184.216.34', family: 4 },
+        { address: '2606:2800:220:1::1', family: 6 },
+      ],
+    });
+    expect(await call(fn, 'a.example', {})).toEqual({ err: null, address: '93.184.216.34', family: 4 });
+    expect((await call(fn, 'a.example', { all: true })).address).toHaveLength(2);
+    expect(await call(fn, 'a.example', { family: 6 })).toMatchObject({ address: '2606:2800:220:1::1', family: 6 });
+  });
+
+  it('accepte la forme (hôte, rappel) et des adresses en chaînes', async () => {
+    const fn = createConnectLookup({ lookup: async () => '93.184.216.34' });
+    const out = await new Promise((resolve) => fn('a.example', (err, address) => resolve({ err, address })));
+    expect(out).toEqual({ err: null, address: '93.184.216.34' });
+  });
+
+  it('refuse si une seule adresse est bloquée, ou si aucune ne reste', async () => {
+    const mixed = createConnectLookup({
+      lookup: async () => [
+        { address: '93.184.216.34', family: 4 },
+        { address: '64:ff9b::7f00:1', family: 6 },
+      ],
+    });
+    expect((await call(mixed, 'a.example', {})).err).toMatchObject({ message: expect.stringMatching(/hôte refusé/) });
+    const empty = createConnectLookup({ lookup: async () => [] });
+    expect((await call(empty, 'a.example', {})).err.message).toMatch(/hôte refusé/);
+    const v4only = createConnectLookup({ lookup: async () => [{ address: '93.184.216.34', family: 4 }] });
+    expect((await call(v4only, 'a.example', { family: 6 })).err.code).toBe('ENOTFOUND');
+  });
+
+  it("propage l'erreur de résolution", async () => {
+    const fn = createConnectLookup({ lookup: async () => Promise.reject(Object.assign(new Error('nx'), { code: 'ENOTFOUND' })) });
+    expect((await call(fn, 'a.example', {})).err.code).toBe('ENOTFOUND');
   });
 });
 

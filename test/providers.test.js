@@ -171,7 +171,23 @@ describe('provider openrouter — plugin web', () => {
     expect(JSON.parse(seen.init.body).plugins[0]).toEqual({
       id: 'web', engine: 'parallel', max_results: 20, exclude_domains: ['a.com'],
     });
-    expect(res).toHaveLength(2);
+    expect(JSON.parse(seen.init.body).usage).toEqual({ include: true });
+    expect(res.results).toHaveLength(2);
+    expect(res.costUsd).toBe(0.0055); // usage.cost de la réponse
+  });
+
+  it('search : coût réel lu dans usage.cost, ignoré s\'il est absent ou invalide', async () => {
+    const withCost = (cost) => async () => jsonResponse({ ...fixture('openrouter-response.json'), usage: { cost } });
+    expect((await openrouter.search({ query: 'q' }, { apiKey: 'K', fetchImpl: withCost(0.0061) })).costUsd).toBe(0.0061);
+    expect((await openrouter.search({ query: 'q' }, { apiKey: 'K', fetchImpl: withCost('x') })).costUsd).toBeNull();
+    expect((await openrouter.search({ query: 'q' }, { apiKey: 'K', fetchImpl: withCost(-1) })).costUsd).toBeNull();
+  });
+
+  it('search : coût réel lu dans usage.cost, ignoré s\'il est invalide', async () => {
+    const withCost = (cost) => async () => jsonResponse({ ...fixture('openrouter-response.json'), usage: { cost } });
+    expect((await openrouter.search({ query: 'q' }, { apiKey: 'K', fetchImpl: withCost(0.0061) })).costUsd).toBe(0.0061);
+    expect((await openrouter.search({ query: 'q' }, { apiKey: 'K', fetchImpl: withCost('x') })).costUsd).toBeNull();
+    expect((await openrouter.search({ query: 'q' }, { apiKey: 'K', fetchImpl: withCost(-1) })).costUsd).toBeNull();
   });
 
   it('search : clé absente → message explicite, crédit épuisé → HTTP 402 lisible', async () => {

@@ -4,12 +4,20 @@ import { config } from '../config.js';
 import { query } from '../db.js';
 import { MEDIA_FILE_RE, mediaUrl } from '../media/files.js';
 import { mediaOf, sourceOf } from '../media/kinds.js';
+import { poolGrantedSql } from '../access.js';
 import { stats } from '../stats.js';
 import { USAGE_VALUES } from '../domains/index.js';
 import { QUERY_STATUSES, listQueries } from '../explore/index.js';
 import { formatPool, FORMATS } from '../pools/export.js';
 import { loadPoolForExport } from '../pools/index.js';
 import {
+  BillingError, answerInvitation, currentPrices, invitationsFor, leaveCommunity, listMembers, ownerRemoveMember,
+  ownerSetMember, walletEntries, walletsFor,
+} from '../billing/index.js';
+import { REQUEST_STATUSES, cancelRequest, createRequest, listRequests } from '../requests/index.js';
+import {
+  ApiError,
+  badRequest,
   boolParam,
   enumParam,
   facetParams,
@@ -21,11 +29,11 @@ import {
   paged,
 } from './params.js';
 
-// Handlers en lecture seule. Chacun reçoit { client, params, query } et renvoie
+// Handlers de l'API. Chacun reçoit { client, params, query, body } et renvoie
 // { body } (JSON) ou { raw, contentType, filename }.
 
 const URL_STATUSES = ['pending', 'normalized', 'classified', 'duplicate', 'error'];
-const RUN_KINDS = ['ingest', 'normalize', 'classify', 'pool', 'explore'];
+const RUN_KINDS = ['ingest', 'normalize', 'classify', 'pool', 'explore', 'media', 'request'];
 const RUN_STATUSES = ['running', 'done', 'failed'];
 const URL_ORDERS = {
   recent: 'ui.first_seen_at DESC, ui.id DESC',
@@ -78,14 +86,17 @@ export async function me({ client }) {
   return { body: { name: client.name, scope: client.scope } };
 }
 
-// --- Pools : visibles par l'admin, ou accordés au client `read`.
+// --- Pools : visibles par l'admin ; pour un client `read`, les pools publics,
+// ceux qui lui sont accordés et ceux de ses communautés.
+
+const GRANTED_SQL = (clientParam) => poolGrantedSql('p', clientParam);
 
 async function visiblePool(client, slug) {
   const { rows } = await query(
-    `SELECT p.id, p.slug, p.label, p.definition, p.created_at, p.refreshed_at
+    `SELECT p.id, p.slug, p.label, p.public, p.definition, p.created_at, p.refreshed_at
        FROM pool p
       WHERE p.slug = $1
-        AND ($2 OR EXISTS (SELECT 1 FROM api_client_pool cp WHERE cp.pool_id = p.id AND cp.api_client_id = $3))`,
+        AND ($2 OR ${GRANTED_SQL('$3')})`,
     [slug, isAdmin(client), client.id],
   );
   // Un pool non accordé est introuvable : son existence n'est pas révélée.
@@ -95,11 +106,13 @@ async function visiblePool(client, slug) {
 
 export async function listPools({ client }) {
   const { rows } = await query(
-    `SELECT p.slug, p.label, p.refreshed_at, count(pi.url_item_id)::int AS items
+    // Filtrer d'abord, compter ensuite : seuls les pools visibles sont comptés,
+    // par l'index (pool_id, rank).
+    `SELECT p.slug, p.label, p.public, p.refreshed_at,
+            (SELECT count(*)::int FROM pool_item pi WHERE pi.pool_id = p.id) AS items
        FROM pool p
-       LEFT JOIN pool_item pi ON pi.pool_id = p.id
-      WHERE $1 OR EXISTS (SELECT 1 FROM api_client_pool cp WHERE cp.pool_id = p.id AND cp.api_client_id = $2)
-      GROUP BY p.id ORDER BY p.slug`,
+      WHERE $1 OR ${GRANTED_SQL('$2')}
+      ORDER BY p.slug`,
     [isAdmin(client), client.id],
   );
   return { body: { items: rows.map((r) => ({ ...r, refreshed_at: iso(r.refreshed_at) })) } };
@@ -128,6 +141,7 @@ export async function getPool({ client, params }) {
   const body = {
     slug: pool.slug,
     label: pool.label,
+    public: pool.public,
     refreshed_at: iso(pool.refreshed_at),
     items: usage.reduce((n, u) => n + u.urls, 0),
     top_domains: domains,
@@ -465,4 +479,158 @@ export async function getMedia({ params }) {
     contentType: 'image/webp',
     headers: { 'Cache-Control': 'public, max-age=31536000, immutable' },
   };
+}
+
+// --- Recherches payantes : prix, portefeuilles, recherches du client.
+
+// Codes métier → statuts HTTP. 402 : il faut des giri (solde ou plafond).
+const BILLING_STATUS = { invalid: 400, not_found: 404, insufficient_balance: 402, spend_limit: 402, too_many_queued: 429 };
+
+async function billingCall(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof BillingError) throw new ApiError(BILLING_STATUS[err.code] ?? 400, err.code, err.message);
+    throw err;
+  }
+}
+
+export async function billing({ client }) {
+  const [wallets, invitations] = await Promise.all([walletsFor(client.id), invitationsFor(client.id)]);
+  return {
+    body: {
+      giri_per_eur: config.giriPerEur,
+      funding_url: config.fundingUrl,
+      max_queued: config.requestMaxQueued,
+      prices: currentPrices().map(({ provider, unit_price, max_pages }) => ({ provider, unit_price, max_pages })),
+      personal: wallets.personal,
+      communities: wallets.communities,
+      invitations: invitations.map((i) => ({ ...i, invited_at: iso(i.invited_at) })),
+    },
+  };
+}
+
+// Communauté dont le client est membre (propriétaire si `owner`), sinon 404.
+async function membership(client, slug, { owner = false } = {}) {
+  const { rows } = await query(
+    `SELECT c.id, st.is_owner, w.id AS wallet_id FROM community c
+       JOIN community_member cm ON cm.community_id = c.id AND cm.api_client_id = $2 AND cm.accepted_at IS NOT NULL
+       JOIN community_standing st ON st.community_id = c.id AND st.api_client_id = cm.api_client_id
+       LEFT JOIN wallet w ON w.community_id = c.id
+      WHERE c.slug = $1`,
+    [slug, client.id],
+  );
+  if (rows.length === 0 || (owner && !rows[0].is_owner)) {
+    throw notFound(owner ? `Communauté inconnue ou réservée à ses propriétaires : ${slug}` : `Communauté inconnue : ${slug}`);
+  }
+  return { id: Number(rows[0].id), walletId: rows[0].wallet_id === null ? null : Number(rows[0].wallet_id) };
+}
+
+// Grand livre du portefeuille personnel, ou de la communauté pour ses propriétaires.
+export async function listBillingEntries({ client, query: qs }) {
+  const page = pageParams(qs);
+  const community = qs.get('community');
+  let walletId;
+  if (community) {
+    walletId = (await membership(client, community, { owner: true })).walletId;
+  } else {
+    const { rows } = await query('SELECT id FROM wallet WHERE api_client_id = $1', [client.id]);
+    walletId = rows[0] ? Number(rows[0].id) : null;
+  }
+  if (walletId === null) return { body: paged([], 0, page) };
+  const { items, total } = await walletEntries({ walletId, ...page });
+  return { body: paged(items.map((e) => ({ ...e, created_at: iso(e.created_at) })), total, page) };
+}
+
+// Recherches du client, ou de toute la communauté pour ses propriétaires.
+export async function listClientRequests({ client, query: qs }) {
+  const page = pageParams(qs);
+  const status = enumParam(qs, 'status', REQUEST_STATUSES);
+  const community = qs.get('community');
+  const scope = community ? { communityId: (await membership(client, community, { owner: true })).id } : { clientId: client.id };
+  const { items, total } = await listRequests({ ...scope, status, ...page });
+  return { body: paged(items, total, page) };
+}
+
+export async function postRequest({ client, body, headers = {} }) {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) throw badRequest('Objet JSON attendu');
+  const known = new Set(['query', 'provider', 'pages', 'pool', 'community']);
+  const unknown = Object.keys(body).filter((k) => !known.has(k));
+  if (unknown.length) throw badRequest(`Champ inconnu : ${unknown.join(', ')}`);
+  for (const key of ['query', 'provider', 'pool', 'community']) {
+    if (body[key] != null && typeof body[key] !== 'string') throw badRequest(`${key} doit être une chaîne`);
+  }
+  const res = await billingCall(() =>
+    createRequest({
+      clientId: client.id,
+      isAdmin: isAdmin(client),
+      provider: body.provider,
+      query: body.query,
+      pages: body.pages,
+      pool: body.pool || undefined,
+      community: body.community || undefined,
+      idempotencyKey: headers['idempotency-key'] ?? null,
+    }),
+  );
+  // Même clé déjà servie : 200 et la recherche existante, sans nouveau débit.
+  const { replayed, ...rest } = res;
+  return replayed
+    ? { status: 200, body: rest, headers: { 'Idempotent-Replayed': 'true' } }
+    : { status: 201, body: rest };
+}
+
+export async function deleteRequest({ client, params }) {
+  const id = idParam(params.id);
+  return { body: await billingCall(() => cancelRequest({ id, clientId: client.id, isAdmin: isAdmin(client) })) };
+}
+
+// Toutes les recherches, pour l'admin.
+export async function listAllRequests({ query: qs }) {
+  const page = pageParams(qs);
+  const status = enumParam(qs, 'status', REQUEST_STATUSES);
+  const { items, total } = await listRequests({ status, ...page, admin: true });
+  return { body: paged(items, total, page) };
+}
+
+// --- Membres d'une communauté, gérés par ses propriétaires.
+
+export async function listCommunityMembers({ client, params }) {
+  const items = await billingCall(() => listMembers({ clientId: client.id, community: params.slug }));
+  return { body: { items: items.map((m) => ({ ...m, joined_at: iso(m.joined_at) })) } };
+}
+
+export async function putCommunityMember({ client, params, body }) {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) throw badRequest('Objet JSON attendu');
+  const unknown = Object.keys(body).filter((k) => k !== 'role' && k !== 'monthly_limit');
+  if (unknown.length) throw badRequest(`Champ inconnu : ${unknown.join(', ')}`);
+  return {
+    body: await billingCall(() =>
+      ownerSetMember({
+        clientId: client.id,
+        community: params.slug,
+        name: params.name,
+        // champ absent : valeur gardée ; monthly_limit null : sans plafond
+        role: body.role,
+        monthlyLimit: body.monthly_limit,
+      }),
+    ),
+  };
+}
+
+export async function deleteCommunityMember({ client, params }) {
+  return { body: await billingCall(() => ownerRemoveMember({ clientId: client.id, community: params.slug, name: params.name })) };
+}
+
+// --- Invitations et départ, côté membre.
+
+export async function acceptInvitation({ client, params }) {
+  return { body: await billingCall(() => answerInvitation({ clientId: client.id, community: params.slug, accept: true })) };
+}
+
+export async function declineInvitation({ client, params }) {
+  return { body: await billingCall(() => answerInvitation({ clientId: client.id, community: params.slug, accept: false })) };
+}
+
+export async function leaveCommunityHandler({ client, params }) {
+  return { body: await billingCall(() => leaveCommunity({ clientId: client.id, community: params.slug })) };
 }

@@ -10,13 +10,13 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { defaultDatabaseUrl, loadDotEnv, rootDir } from '../../src/env.js';
+import { loadDotEnv, resolveDatabaseUrl, rootDir } from '../../src/env.js';
 
 const here = join(rootDir, 'examples', 'lora');
 const remoteAllowed = process.argv.includes('--remote');
 
 loadDotEnv();
-const { hostname } = new URL(process.env.DATABASE_URL || defaultDatabaseUrl());
+const { hostname } = new URL(resolveDatabaseUrl());
 if (!['localhost', '127.0.0.1', '[::1]'].includes(hostname) && !remoteAllowed) {
   console.error(`Base distante (${hostname}) : relancer avec --remote pour y verser le jeu LoRA.`);
   process.exit(1);

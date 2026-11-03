@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { defaultDatabaseUrl, intEnv, loadDotEnv, ratioEnv, rootDir } from './env.js';
+import { intEnv, loadDotEnv, numberEnv, ratioEnv, resolveDatabaseUrl, rootDir } from './env.js';
 
 loadDotEnv();
 
@@ -14,10 +14,17 @@ function readRevision() {
 
 const { version } = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
 
+let databaseUrl;
+
 // Gelée : les réglages se passent en paramètre (tests compris), jamais par mutation.
 export const config = Object.freeze({
   rootDir,
-  databaseUrl: process.env.DATABASE_URL ?? defaultDatabaseUrl(),
+  // Lue à la première connexion : hors développement et tests, l'absence de
+  // DATABASE_URL arrête net, sans toucher aux commandes qui n'ouvrent pas la base.
+  get databaseUrl() {
+    databaseUrl ??= resolveDatabaseUrl();
+    return databaseUrl;
+  },
   braveApiKey: process.env.BRAVE_API_KEY ?? '',
   openrouterApiKey: process.env.OPENROUTER_API_KEY ?? '',
   openrouterEngine: process.env.OPENROUTER_ENGINE || 'perplexity',
@@ -60,6 +67,32 @@ export const config = Object.freeze({
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean),
+  // connexions simultanées au plus ; requêtes par minute et par jeton (par IP
+  // sans jeton), 0 pour ne pas limiter
+  apiMaxConnections: intEnv('WEBPOOL_API_MAX_CONNECTIONS', 256, 1),
+  apiRateLimit: intEnv('WEBPOOL_API_RATE_LIMIT', 300, 0),
+  // derrière le proxy de l'hébergeur : IP du client lue dans X-Forwarded-For
+  apiTrustProxy: ['1', 'true'].includes(process.env.WEBPOOL_API_TRUST_PROXY ?? ''),
+  // Recherches payantes (webpool requests) : prix d'un appel en giri entiers,
+  // coût du provider × cours USD→EUR × majoration × giri par euro, arrondi au-dessus.
+  giriPerEur: intEnv('WEBPOOL_GIRI_PER_EUR', 1000, 1),
+  usdEur: numberEnv('WEBPOOL_USD_EUR', 0.92, { min: 0, exclusive: true }),
+  priceMarkup: numberEnv('WEBPOOL_PRICE_MARKUP', 2, { min: 1 }),
+  // coûts par appel en USD qui remplacent ceux du code : "brave=0.005,searxng=0"
+  callCostsUsd: process.env.WEBPOOL_CALL_COST_USD ?? '',
+  requestProviders: (process.env.WEBPOOL_REQUEST_PROVIDERS || 'openrouter,brave')
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean),
+  requestMaxPages: intEnv('WEBPOOL_REQUEST_MAX_PAGES', 3, 1),
+  requestMaxQueued: intEnv('WEBPOOL_REQUEST_MAX_QUEUED', 5, 1),
+  // crédit minimal en centimes : sous ce montant, les frais fixes de paiement
+  // (≈ 0,25 € par transaction) dépassent la marge
+  minCreditCents: intEnv('WEBPOOL_MIN_CREDIT_CENTS', 200, 0),
+  // plafond d'un nouveau membre de communauté sans plafond explicite (giri / 30 jours)
+  memberDefaultLimit: process.env.WEBPOOL_MEMBER_DEFAULT_LIMIT === 'none' ? null : intEnv('WEBPOOL_MEMBER_DEFAULT_LIMIT', 1000, 0),
+  // page de don ou d'achat de giri affichée par l'interface
+  fundingUrl: process.env.WEBPOOL_FUNDING_URL || null,
   userAgent: `webpool/${version} (+https://github.com/RebelliousSmile/webpool)`,
   version,
   // commit déployé, écrit par scripts/deploy.mjs dans REVISION ; null en développement

@@ -18,6 +18,8 @@ export function buildBody(query, { limit = 20, engine = 'perplexity', model, exc
     plugins: [plugin],
     messages: [{ role: 'user', content: `Reply with "ok". Search: ${query}` }],
     max_tokens: 5,
+    // coût réel de l'appel dans usage.cost (USD), pour vérifier le prix des recherches
+    usage: { include: true },
   };
 }
 
@@ -43,5 +45,6 @@ export async function search(
     timeoutMs: config.openrouterTimeoutMs,
     fetchImpl,
   });
-  return mapResponse(data);
+  const cost = data?.usage?.cost;
+  return { results: mapResponse(data), costUsd: typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : null };
 }

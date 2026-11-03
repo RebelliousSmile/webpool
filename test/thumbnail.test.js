@@ -1,6 +1,14 @@
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
-import { ImageRefusedError, MEDIA_FILE_RE, icoLargestPng, makeImage } from '../src/media/thumbnail.js';
+import {
+  ACCEPTED_FORMATS,
+  ImageRefusedError,
+  MEDIA_FILE_RE,
+  acceptedFormat,
+  icoLargestPng,
+  makeImage,
+  sniffRefusedFormat,
+} from '../src/media/thumbnail.js';
 
 const png = (width, height) =>
   sharp({ create: { width, height, channels: 3, background: { r: 30, g: 120, b: 60 } } }).png().toBuffer();
@@ -64,5 +72,58 @@ describe('makeImage', () => {
     truncated.writeUInt16LE(3, 4);
     expect(icoLargestPng(truncated)).toBeNull();
     expect(icoLargestPng(Buffer.from([1, 2]))).toBeNull();
+  });
+});
+
+// Les encodeurs restent disponibles : seuls les décodeurs sont restreints.
+const encode = (format) =>
+  sharp({ create: { width: 16, height: 12, channels: 3, background: '#c33' } }).toFormat(format).toBuffer();
+
+const XML_SVG = Buffer.from('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><script>alert(1)</script></svg>');
+
+describe('makeImage — formats acceptés', () => {
+  it('ne connaît que jpeg, png, webp, gif et avif', () => {
+    expect(ACCEPTED_FORMATS).toEqual(['jpeg', 'png', 'webp', 'gif', 'avif']);
+  });
+
+  it.each(['jpeg', 'png', 'webp', 'gif', 'avif'])('réduit un %s en WebP', async (format) => {
+    const out = await makeImage(await encode(format));
+    expect(out.file).toMatch(MEDIA_FILE_RE);
+    expect((await sharp(out.data).metadata()).format).toBe('webp');
+  });
+
+  it.each([
+    ['tiff', () => encode('tiff')],
+    ['svg', async () => XML_SVG],
+  ])('refuse un %s', async (format, make) => {
+    const err = await makeImage(await make()).catch((e) => e);
+    expect(err).toBeInstanceOf(ImageRefusedError);
+    expect(err.message).toBe(`format refusé : ${format}`);
+  });
+
+  it("refuse ce qu'aucun décodeur autorisé ne lit", async () => {
+    await expect(makeImage(Buffer.from('%PDF-1.7\n'))).rejects.toThrow('format refusé : pdf');
+    await expect(makeImage(Buffer.from('rien de lisible'))).rejects.toThrow('image illisible');
+  });
+});
+
+describe('acceptedFormat', () => {
+  it('distingue AVIF (AV1) et HEIC (HEVC), tous deux « heif » pour sharp', () => {
+    expect(acceptedFormat({ format: 'heif', compression: 'av1' })).toBe('avif');
+    expect(acceptedFormat({ format: 'heif', compression: 'hevc' })).toBeNull();
+    expect(acceptedFormat({ format: 'tiff' })).toBeNull();
+    expect(acceptedFormat({ format: 'svg' })).toBeNull();
+    expect(acceptedFormat({ format: 'png' })).toBe('png');
+  });
+});
+
+describe('sniffRefusedFormat', () => {
+  it('reconnaît tiff, svg et pdf', () => {
+    expect(sniffRefusedFormat(Buffer.from('II*\0rest'))).toBe('tiff');
+    expect(sniffRefusedFormat(Buffer.from('MM\0*rest'))).toBe('tiff');
+    expect(sniffRefusedFormat(XML_SVG)).toBe('svg');
+    expect(sniffRefusedFormat(Buffer.from('  <!-- c --><svg>'))).toBe('svg');
+    expect(sniffRefusedFormat(Buffer.from('%PDF-1.4'))).toBe('pdf');
+    expect(sniffRefusedFormat(Buffer.from('GIF89a'))).toBeNull();
   });
 });

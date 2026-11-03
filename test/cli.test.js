@@ -8,8 +8,12 @@ const cwd = fileURLToPath(new URL('..', import.meta.url));
 
 // Ces cas échouent avant toute connexion : aucune base n'est requise.
 async function cli(...args) {
+  return cliWithEnv(process.env, ...args);
+}
+
+async function cliWithEnv(env, ...args) {
   try {
-    const { stdout, stderr } = await run(process.execPath, ['bin/webpool.js', ...args], { cwd });
+    const { stdout, stderr } = await run(process.execPath, ['bin/webpool.js', ...args], { cwd, env });
     return { code: 0, stdout, stderr };
   } catch (err) {
     return { code: err.code, stdout: err.stdout, stderr: err.stderr };
@@ -88,5 +92,22 @@ describe('CLI', () => {
     const { code, stderr } = await cli('classify', `--limit=${value}`);
     expect(code).toBe(1);
     expect(stderr).toContain('--limit doit être un entier > 0');
+  });
+});
+
+describe('CLI — DATABASE_URL hors développement', () => {
+  const rest = { ...process.env };
+  delete rest.DATABASE_URL;
+
+  it('arrête net, avec un message clair, une commande qui ouvre la base', async () => {
+    const { code, stderr } = await cliWithEnv({ ...rest, NODE_ENV: 'production' }, 'stats');
+    expect(code).toBe(1);
+    expect(stderr).toContain('DATABASE_URL absente (NODE_ENV=production)');
+    expect(stderr).not.toContain('webpool:webpool@');
+  });
+
+  it("laisse passer une commande qui n'ouvre pas la base", async () => {
+    const { code } = await cliWithEnv({ ...rest, NODE_ENV: 'production' }, '--help');
+    expect(code).toBe(0);
   });
 });

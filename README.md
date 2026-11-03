@@ -180,8 +180,12 @@ du bloc, puis écriture, puis bloc suivant. La mémoire reste bornée et un bloc
 est conservé si un bloc suivant échoue. L'ingest, la classification et le refresh
 d'un pool écrivent chacun leur lot en quelques requêtes groupées.
 
-Les URL visitées viennent de l'extérieur : avant chaque requête, l'hôte est résolu
-et refusé (`error` : « hôte refusé ») si une de ses adresses n'est pas publique —
+Les URL visitées viennent de l'extérieur : l'hôte est jugé au moment même de la
+connexion (dispatcher undici dont la résolution DNS applique la garde : pas de
+DNS rebinding entre le contrôle et la connexion), pour la normalisation comme
+pour les médias. Seule l'unicast globale publique passe ; une IPv4 encapsulée
+(NAT64, 6to4, `::ffff:0:0/96`, `::/96`) est décodée et jugée. Concrètement, l'hôte
+est résolu et refusé (`error` : « hôte refusé ») si une de ses adresses n'est pas publique —
 loopback, plages privées, link-local et métadonnées cloud (`169.254.169.254`),
 CGNAT, IPv6 locales. Les redirections sont suivies une à une : chaque saut repasse
 ce contrôle et le délai par hôte, dans la limite de `WEBPOOL_MAX_REDIRECTS`
@@ -341,6 +345,141 @@ Limites :
 - Les requêtes s'écrivent à la main. Les générer à partir du corpus est prévu
   dans une phase ultérieure.
 
+## Recherches payantes : dons et giri
+
+Les pools restent gratuits. Une **recherche** (requête envoyée à un provider,
+page par page) consomme des tokens : elle se paie d'avance en **giri**, l'unité
+entière du grand livre (1 € = `WEBPOOL_GIRI_PER_EUR` giri, 1 000 par défaut).
+
+- Un particulier crédite son portefeuille personnel par un **don**.
+- Dans une **communauté**, on ne paie pas pour soi : les membres versent des giri
+  au **pot commun** (apport à leur nom), et les recherches sur les pools de la
+  communauté se paient sur ce pot, jamais sur un portefeuille personnel. Les
+  membres voient ces pools sans accord individuel.
+- Le **propriétaire** d'une communauté est le membre qui a **versé le plus de giri
+  au pot** (total de ses apports) ; ex æquo, tous les premiers le sont. Le rôle se
+  calcule, il ne se donne pas : il change de mains quand un autre membre dépasse le
+  premier. Tant que personne n'a versé, c'est le fondateur désigné par l'admin
+  (`community join --role owner`). Seuls comptent les membres actifs (invitation
+  acceptée, jeton non révoqué). Le propriétaire invite des clients, règle les
+  plafonds, retire des membres (pas un autre propriétaire), voit le grand livre
+  du pot et toutes les recherches ; il n'a pas de plafond. Un invité n'entre qu'en
+  acceptant, et peut ensuite quitter la communauté ; un propriétaire qui part
+  passe la main au plus gros apport suivant, mais ne peut pas laisser des membres
+  sans propriétaire. L'admin, lui, rattache directement (`community join`). Un
+  nouveau membre sans plafond explicite reçoit `WEBPOOL_MEMBER_DEFAULT_LIMIT` giri
+  sur 30 jours (1 000 par défaut).
+- Un **pool public** (`pool publish`) est visible et exportable par tout client,
+  sans accord : c'est l'accès gratuit par défaut. Un accès reste un jeton créé par
+  l'admin (`client add`) ; il n'y a pas d'inscription en libre-service.
+
+```bash
+# Communauté, membres (plafond en giri sur 30 jours glissants), pools rattachés
+pnpm webpool community add --slug atelier --label "Atelier photo"
+pnpm webpool community join --slug atelier --name alice --role owner   # fondatrice : propriétaire tant que personne n'a versé
+pnpm webpool community join --slug atelier --name bob --monthly 2000
+pnpm webpool community attach --slug atelier --pool nagasaki
+
+# Paiement reçu (Liberapay, Ko-fi, virement…) : don ou achat, crédité une seule fois par référence
+pnpm webpool pool publish --slug nagasaki        # visible par tout client (unpublish pour revenir)
+pnpm webpool wallet credit --name carol --eur 5 --ref liberapay:1234   # 2 € au moins, sinon --force
+pnpm webpool wallet credit --community atelier --by bob --eur 20 --ref virement:2026-10-31   # apport de bob au pot
+pnpm webpool wallet adjust --community atelier --giri=-500 --note "geste commercial annulé"
+pnpm webpool wallet show --community atelier
+
+pnpm webpool pricing                      # prix d'un appel par provider
+pnpm webpool requests run [--offline]     # tâche planifiée : exécute les recherches payées
+pnpm webpool requests list [--status queued]
+pnpm webpool requests cancel --id 12      # recherche en attente, remboursée
+pnpm webpool billing report --days 30     # recettes, coût des providers, marge, encours
+```
+
+**Prix.** Un appel coûte `max(1, ⌈coût USD × WEBPOOL_USD_EUR × WEBPOOL_PRICE_MARKUP × WEBPOOL_GIRI_PER_EUR⌉)`
+giri. Le coût par défaut est celui mesuré pour OpenRouter, selon le moteur
+(perplexity 0,0055 $, exa 0,0175 $, parallel 0,016 $), et le tarif public de
+Brave (0,005 $). Avec les défauts, un appel OpenRouter coûte 11 giri (0,011 €) et
+un appel Brave 10 giri. Les providers gratuits paient le plancher de 1 giri : ils
+consomment des quotas et le traitement du serveur. Le provider `file`, qui lit un
+fichier local, n'est jamais ouvert aux recherches. Le prix est figé sur la
+recherche à l'achat.
+
+**Achat** (`POST /api/v1/requests`, écran « Recherches » de datapool). Une
+recherche achète de 1 à `WEBPOOL_REQUEST_MAX_PAGES` pages (1 seule pour
+OpenRouter, qui ne pagine pas). Le prix est débité dans la transaction qui
+l'inscrit : solde insuffisant (402), plafond du membre atteint (402) ou trop de
+recherches en attente (429, `WEBPOOL_REQUEST_MAX_QUEUED`), et rien n'est écrit.
+L'en-tête `Idempotency-Key` (1 à 100 caractères `A-Za-z0-9_-`) protège d'un
+double achat : le même client qui renvoie la même clé (double clic, relance après
+une coupure) reçoit la recherche déjà achetée (200, `Idempotent-Replayed: true`),
+sans nouveau débit.
+Une recherche sur un pool d'une des communautés du client est payée par cette
+communauté, sans choix : `community` est déduite, ou exigée si plusieurs de ses
+communautés possèdent le pool. Le pot d'une communauté ne paie que ses pools. Son auteur peut l'annuler tant qu'elle attend, et il est alors
+remboursé.
+
+**Exécution.** `requests run` (toutes les 15 minutes) tient le verrou consultatif
+du pipeline, partagé avec `cycle` : elle passe son tour pendant un cycle, et le
+cycle attend qu'elle finisse, pour qu'ils ne normalisent jamais la même file
+ensemble ; `normalize` et `classify` lancés à la main refusent de tourner
+pendant ce temps. Elle lance les recherches en attente dans l'ordre d'achat,
+page après page, avec l'exclusion des domaines saturés de l'exploration. Elle
+s'arrête au premier appel en échec ou à la première page vide ; les pages non
+lancées sont remboursées, sans repli vers un autre provider. Une recherche
+trouvée `running` au démarrage (processus interrompu, le verrou garantit qu'elle
+est orpheline) est close et remboursée de ses appels non faits. Un échec
+d'écriture après un appel facturé rembourse l'appel, mais son coût estimé compte
+dans `billing report`.
+
+Vient ensuite le **post-traitement** des recherches faites : `normalize` et
+`classify` de leurs seules URLs, un lot de `media`, puis le refresh des pools
+visés. Une recherche n'est marquée traitée que si tout a réussi (les médias
+mis à part) ; sinon le `requests run` suivant la reprend, même sans nouvelle
+recherche, et la commande sort en code 1. `in_pool`, les URLs de la recherche
+présentes dans le pool, se calcule à la lecture : il suit aussi les refresh de
+`cycle` et de `pool refresh`. Le coût réel d'un appel OpenRouter (`usage.cost`)
+est enregistré, une estimation sinon : `billing report` compare recettes et
+coût. Un client ne voit de l'erreur d'une recherche qu'un message générique ;
+l'admin voit le message brut du provider (`/admin/requests`, `requests list`).
+
+**Pools ouverts aux recherches.** Un pool est défini par des critères : une URL
+trouvée par une recherche n'y entre que si elle les remplit. Avec
+`"include_requests": true` dans sa définition, les URLs classées des recherches
+qui visent ce pool **et sont payées par une communauté propriétaire du pool** y
+entrent aussi, sans remplir les critères de sujet (`theme`, `subthemes`,
+`facets`, `domains_include`). Elles s'ajoutent après la sélection normale (au plus
+`limit` de plus) au lieu de lui disputer ses places : une recherche payée apporte
+toujours ses liens. Les seuils `min_relevance` et `min_quality` et
+`domains_exclude` s'appliquent toujours.
+L'option est désactivée par défaut. Une recherche payée sur un portefeuille
+personnel n'entre jamais par cette voie, même sur un pool public : sinon
+n'importe quel client qui voit le pool y injecterait des liens pour 1 giri.
+
+**Cadre.** Le « don » donne droit à un service : c'est un prépaiement, sans reçu
+fiscal, éventuellement soumis à la TVA selon le statut de l'éditeur. Le giri
+reste en circuit fermé : il ne se transfère pas, ne se rembourse pas en € et ne
+s'utilise qu'en recherches. Il n'expire pas : les giri non dépensés sont une dette
+en recherches, que `billing report` affiche comme encours. Sous
+`WEBPOOL_MIN_CREDIT_CENTS` (2 €), les frais fixes d'un paiement (environ 0,25 €)
+dépassent la marge : `wallet credit` refuse, sauf `--force`. Le grand livre est
+conservé : un client ou une communauté qui a un portefeuille ne se supprime pas en
+base (on révoque le client). Le paiement en ligne n'est pas intégré. L'admin
+crédite à réception du paiement ; `WEBPOOL_FUNDING_URL` donne à l'interface le
+lien de la page de don ou d'achat. Plan, pistes écartées et remise en question :
+[`aidd_docs/tasks/2026_10/2026_10_31_recherches-payantes/plan.md`](aidd_docs/tasks/2026_10/2026_10_31_recherches-payantes/plan.md).
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `WEBPOOL_GIRI_PER_EUR` | 1000 | giri crédités pour 1 € |
+| `WEBPOOL_USD_EUR` | 0.92 | cours appliqué au coût des providers |
+| `WEBPOOL_PRICE_MARKUP` | 2 | majoration du coût (≥ 1) : frais de paiement, appels sans résultat, cours |
+| `WEBPOOL_CALL_COST_USD` | aucun | coûts par appel qui remplacent ceux du code : `brave=0.004,openrouter:exa=0.02` |
+| `WEBPOOL_REQUEST_PROVIDERS` | `openrouter,brave` | providers ouverts aux recherches (`file` toujours exclu) |
+| `WEBPOOL_REQUEST_MAX_PAGES` | 3 | pages achetables par recherche |
+| `WEBPOOL_REQUEST_MAX_QUEUED` | 5 | recherches en attente au plus par client |
+| `WEBPOOL_MIN_CREDIT_CENTS` | 200 | crédit minimal en centimes (`--force` pour passer outre) |
+| `WEBPOOL_MEMBER_DEFAULT_LIMIT` | 1000 | plafond (giri / 30 jours) d'un nouveau membre sans plafond explicite ; `none` : aucun |
+| `WEBPOOL_FUNDING_URL` | aucune | page de don ou d'achat de giri affichée par datapool |
+
 ## Médias des liens
 
 La normalisation en ligne lit le `<head>` de chaque page : description
@@ -357,7 +496,9 @@ pnpm webpool media --retry-failed  # retente les échecs
 
 `webpool media` (aussi étape de `cycle`, sautée hors ligne) télécharge ces images
 avec les protections de la normalisation (hôtes publics seulement, délai par hôte,
-retries, taille bornée), refuse SVG et images de plus de 40 Mpx, réduit en WebP
+retries, taille bornée), n'accepte que jpeg, png, webp, gif et avif (heif/heic,
+tiff et svg refusés, seuls les décodeurs libvips de ces formats sont actifs) et
+des images de 40 Mpx au plus, réduit en WebP
 (vignette 480 px de large, favicon 64 px, métadonnées retirées) et range chaque
 fichier sous son empreinte dans `WEBPOOL_MEDIA_DIR`. Un `.ico` n'est accepté que
 s'il contient une image PNG. L'API sert ces fichiers sans jeton
@@ -375,7 +516,7 @@ communautés, plateformes vidéo, presse et guides, autres) se calcule à la lec
 depuis le domaine (`src/media/kinds.js`) : enrichir la liste ne demande aucune
 reprise du corpus.
 
-## API HTTP (lecture seule)
+## API HTTP
 
 `webpool serve` expose le corpus et les pools en JSON, pour l'interface
 [datapool](https://github.com/RebelliousSmile/datapool) ou pour des clients. Le
@@ -392,8 +533,8 @@ curl -H "Authorization: Bearer wp_…" http://127.0.0.1:3000/api/v1/admin/stats
 
 **Clients.** Chaque client a sa clé ; la base n'en garde que l'empreinte SHA-256
 (`api_client`). Un client `admin` voit tout. Un client `read` ne voit que les pools
-qui lui sont accordés, sans leur définition ni leurs scores ; un pool non accordé
-répond 404.
+publics, ceux qui lui sont accordés et ceux de ses communautés, sans leur
+définition ni leurs scores ; un autre pool répond 404.
 
 ```bash
 pnpm webpool client add --name client-a            # scope read par défaut
@@ -410,15 +551,26 @@ pnpm webpool client revoke --name client-a
 | `/pools`, `/pools/{slug}` | read | pools visibles ; volumes, domaines principaux, répartition de l'usage commercial |
 | `/pools/{slug}/export?format=json\|csv\|md\|txt` | read | le pool entier dans l'ordre de rang, sans définition ni score (`txt` : une URL par ligne) |
 | `/pools/{slug}/items` | read | URLs rangées, paginées (`limit` ≤ 500, `offset`), avec description, type de média, famille de source, vignette et favicon |
+| `/billing` | read | prix des recherches, solde personnel, communautés (rôle, solde, plafond, dépense sur 30 jours) |
+| `/billing/entries?community=` | read | grand livre personnel, ou de la communauté pour ses propriétaires |
+| `GET /requests?community=&status=` | read | recherches du client, ou de la communauté pour ses propriétaires |
+| `POST /requests` | read | achète une recherche (`{query, provider, pages, pool, community}`), 201 |
+| `DELETE /requests/{id}` | read | annule une recherche en attente, remboursée |
+| `GET /communities/{slug}/members`, `PUT`/`DELETE …/members/{name}` | read (propriétaires) | membres du plus gros apport au plus petit (rôle calculé, fondateur, plafond, dépense, apports, invitation acceptée) ; invitation, plafond, retrait d'un membre ; le rôle ne se donne pas |
+| `POST`/`DELETE /communities/{slug}/invitation`, `DELETE /communities/{slug}/membership` | read | accepter ou décliner une invitation (listées dans `/billing`), quitter une communauté |
 | `/admin/stats` | admin | volumes pour un tableau de bord |
 | `/admin/pools/{slug}/export?format=json\|csv\|md\|txt` | admin | export de `pool export`, définition et scores compris |
 | `/admin/urls`, `/admin/urls/{id}` | admin | corpus filtré (`status`, `theme`, `facet=slug:valeur`, `domain`, `q`, `order`) ; fiche : sources, thèmes, facettes, pools |
 | `/admin/themes`, `/admin/facets` | admin | taxonomie en arbre, valeurs de facettes, avec volumes |
 | `/admin/domains` | admin | registre (`to_qualify`, `excluded`, `usage`, `q`) |
 | `/admin/queries`, `/admin/runs` | admin | frontière d'exploration, historique du pipeline |
+| `/admin/requests` | admin | toutes les recherches payantes |
 
 Les erreurs sont en JSON (`{"error": {"code", "message"}}`) : 400 paramètre
-invalide, 401 jeton absent ou révoqué, 403 route admin, 404, 405. Une erreur
+invalide (dont un octet NUL dans le chemin, les paramètres ou le corps), 401
+jeton absent ou révoqué, 402 giri insuffisants, 403 route admin, 404, 405, 413
+corps de plus de 8 Ko, 415 corps autre que JSON, 429 trop de recherches en
+attente ou trop de requêtes. Une erreur
 interne répond 500 sans détail ; le détail part dans le journal du serveur, qui
 trace une ligne par requête (méthode, chemin, statut, durée, client).
 
@@ -427,9 +579,26 @@ trace une ligne par requête (méthode, chemin, statut, durée, client).
 | `WEBPOOL_API_PORT` | `PORT`, sinon 3000 | port d'écoute (`--port`) |
 | `WEBPOOL_API_HOST` | `IP`, sinon 127.0.0.1 | adresse d'écoute (`--host`) |
 | `WEBPOOL_API_CORS_ORIGINS` | aucune | origines autorisées, séparées par des virgules (ex. l'URL de datapool) |
+| `WEBPOOL_API_RATE_LIMIT` | 300 | requêtes par minute et par jeton (par IP sans jeton), fenêtre glissante en mémoire ; `0` : aucune limite. Au-delà, 429 `rate_limited` et `Retry-After`. Les échecs d'authentification comptent par IP ; les vignettes `/media` ne sont pas limitées |
+| `WEBPOOL_API_MAX_CONNECTIONS` | 256 | connexions simultanées au plus ; requête coupée après 30 s, en-têtes incomplets après 15 s, connexion inactive fermée après 5 s |
+| `WEBPOOL_API_TRUST_PROXY` | non | `1` : IP du client lue dans la dernière entrée de `X-Forwarded-For`. À activer seulement derrière un proxy de confiance (alwaysdata : vérifier que l'en-tête est posé) ; sinon toutes les requêtes sans jeton partagent un compteur |
 
-L'API ne fait que lire : pour aller plus loin, la base peut être ouverte au serveur
-par un rôle PostgreSQL limité à `SELECT`. Elle se déploie comme un site Node.js
+L'API lit le corpus et n'écrit que les recherches payantes et les membres des
+communautés. Pour aller plus loin,
+la base peut être ouverte au serveur par un rôle PostgreSQL limité à `SELECT`, plus
+`INSERT, UPDATE` sur `search_request`, `wallet` et `wallet_entry`, `INSERT, UPDATE, DELETE` sur
+`community_member` (gestion des membres) et `USAGE` sur leurs séquences. Les
+achats et les changements de membres se sérialisent par verrous consultatifs, sans
+`SELECT … FOR UPDATE` sur `api_client` ni `community` : ces droits suffisent, ce
+que vérifie un test d'intégration avec un rôle créé ainsi :
+
+```sql
+GRANT USAGE ON SCHEMA public TO webpool_api;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO webpool_api;
+GRANT INSERT, UPDATE ON search_request, wallet, wallet_entry TO webpool_api;
+GRANT INSERT, UPDATE, DELETE ON community_member TO webpool_api;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO webpool_api;
+``` Elle se déploie comme un site Node.js
 (voir *Déploiement*) ; `/api/v1/health` renvoie la version et le commit livré.
 
 ## Déploiement (alwaysdata)
@@ -526,7 +695,7 @@ termine aussi par un redémarrage du site.
 1. créer le site Node.js ci-dessus et compléter `~/www/webpool.env`
    (`WEBPOOL_MEDIA_DIR`, `WEBPOOL_API_CORS_ORIGINS`) ;
 2. `pnpm deploy:prod ad` (prévisualisation), puis `--apply` : migrations jusqu'à
-   `008`, bascule, redémarrage, contrôle de `/health` ;
+   `011`, bascule, redémarrage, contrôle de `/health` ;
 3. sur la cible, créer la clé d'accès :
    `cd ~/www/webpool && NODEJS_VERSION=24 node bin/webpool.js client add --name <nom> --scope admin`
    (le jeton n'est affiché qu'une fois) ;
@@ -549,7 +718,12 @@ créée dans l'admin, pas par le script de déploiement :
 | Fréquence | `0 4 * * 1` (lundi, 4 h) |
 
 Avec 20 appels par semaine, le coût reste autour de 0,11 $ (OpenRouter, moteur
-Perplexity). Ne pas déployer pendant un passage : la tâche tourne dans le
+Perplexity).
+
+Les recherches payantes ont leur propre tâche, à la même configuration :
+commande `node bin/webpool.js requests run`, fréquence `*/15 * * * *`. Le verrou
+du pipeline l'empêche de tourner en même temps qu'une autre exécution ou que
+`cycle` ; elle ne fait rien sans recherche en attente. Ne pas déployer pendant un passage : la tâche tourne dans le
 répertoire que la bascule remplace.
 
 `cycle` explore, normalise, classe et rafraîchit tous les pools. Pour une chaîne
@@ -564,7 +738,7 @@ sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
 
 | Chemin | Rôle |
 |---|---|
-| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) ; `002` à `008` : domain_profile, search_query, search_query_run, exclusion_hash, api_client, tuyaux, url_media |
+| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) ; `002` à `011` : domain_profile, search_query, search_query_run, exclusion_hash, api_client, tuyaux, url_media, communautés, portefeuilles et recherches payantes, rétention du grand livre et pools publics, idempotence, reprise du post-traitement, invitations et index |
 | `src/ingest/` | Providers SERP (`file`, `brave`, `searxng`, `europeana`, `flickr`, `openrouter`) + insertion tracée |
 | `src/normalize/` | Canonisation stricte (tracking, redirections, dédup domaine+canonique), fetch poli |
 | `src/classify/` | Classifieur par règles piloté par `config/taxonomy.json` |
@@ -572,9 +746,14 @@ sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
 | `src/explore/` | Frontière de requêtes, exclusion des domaines saturés, `explore` (fonctions pures dans `frontier.js` et `exclusion.js`) |
 | `src/domains/` | Registre des domaines et facette `usage-commercial` |
 | `src/media/` | Type de média et famille de source (`kinds.js`), réduction d'images (`thumbnail.js`, sharp), cache `webpool media` |
-| `src/cycle/` | `cycle` : explore, normalize, classify, media, refresh des pools |
+| `src/cycle/` | `cycle` : explore, puis les étapes du pipeline et le refresh de tous les pools |
+| `src/pipeline/` | Étapes partagées par `cycle` et `requests run` (normalize, classify, media par lots, refresh de pools), isolées les unes des autres |
+| `src/lock.js` | Verrou consultatif du pipeline (`cycle`, `requests run`, `normalize` et `classify` à la main) |
+| `src/access.js` | Règle unique de visibilité d'un pool (public, accordé, communauté acceptée) |
+| `src/billing/` | Prix des recherches (`pricing.js`, pur), communautés, portefeuilles et grand livre des giri, rapport |
+| `src/requests/` | Recherches payantes : achat, annulation, exécution (`requests run`) |
 | `src/pools/` | Définition JSON → SQL paramétré → matérialisation rangée → export |
-| `src/api/` | API HTTP en lecture seule (`serve`), clients et jetons ; routeur, paramètres et serveur testables sans base |
+| `src/api/` | API HTTP (`serve`), clients et jetons ; routeur, paramètres et serveur testables sans base |
 | `openapi.json` | Contrat de l'API |
 | `bin/webpool.js` | CLI |
 | `scripts/deploy.mjs` | Déploiement alwaysdata (`pnpm deploy:prod`), fonctions pures dans `deploy-lib.mjs` |
@@ -600,6 +779,11 @@ un processus séparé, que la mesure ne suit pas.
 La suite d'intégration utilise le PostgreSQL docker local dans un schéma jetable créé
 puis supprimé par fichier de test, remis à zéro entre les tests. Elle charge `.env` et
 calcule la même URL que le CLI (`DATABASE_URL`, sinon `localhost:${WEBPOOL_DB_PORT:-5432}`).
+
+`DATABASE_URL` est obligatoire hors développement : le conteneur local
+`postgres://webpool:webpool@localhost:${WEBPOOL_DB_PORT:-5432}/webpool` ne sert de
+défaut que si `NODE_ENV` est absent, `development` ou `test`. Sinon, la première
+commande qui ouvre la base s'arrête avec un message explicite.
 
 Sur un poste, elle est ignorée avec un avertissement si la base est injoignable.
 `WEBPOOL_IT_REQUIRED=1` la rend obligatoire : une base injoignable fait alors échouer
