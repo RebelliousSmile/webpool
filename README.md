@@ -371,8 +371,9 @@ entière du grand livre (1 € = `WEBPOOL_GIRI_PER_EUR` giri, 1 000 par défaut)
   nouveau membre sans plafond explicite reçoit `WEBPOOL_MEMBER_DEFAULT_LIMIT` giri
   sur 30 jours (1 000 par défaut).
 - Un **pool public** (`pool publish`) est visible et exportable par tout client,
-  sans accord : c'est l'accès gratuit par défaut. Un accès reste un jeton créé par
-  l'admin (`client add`) ; il n'y a pas d'inscription en libre-service.
+  sans accord : c'est l'accès gratuit par défaut. Un accès reste créé par l'admin
+  (`client add`, ou `account invite` pour un compte à mot de passe) ; il n'y a pas
+  d'inscription en libre-service.
 
 ```bash
 # Communauté, membres (plafond en giri sur 30 jours glissants), pools rattachés
@@ -583,12 +584,31 @@ pnpm webpool client list
 pnpm webpool client revoke --name client-a
 ```
 
+**Comptes.** Un client `read` peut aussi se connecter par e-mail et mot de passe,
+sur invitation de l'admin : il n'y a ni inscription libre ni envoi de mail, le code
+d'activation se transmet à la main. Le compte choisit son mot de passe (12
+caractères au moins, empreinte scrypt) avec ce code, valable 7 jours et à usage
+unique, puis obtient une session de 30 jours (jeton `wps_…`, empreinte SHA-256
+en base, table `api_session`). Une nouvelle invitation vaut réinitialisation :
+mot de passe effacé, sessions révoquées. Changer de mot de passe révoque les
+autres sessions. Le jeton brut du client (`wp_…`) reste accepté.
+
+```bash
+pnpm webpool account invite --name camille --email camille@atelier.example [--days 7]
+# Client read créé "camille" invité (camille@atelier.example), jusqu'au … UTC.
+# Code d'activation, affiché une seule fois :
+# wpi_…
+```
+
 | Route (`/api/v1`) | Accès | Contenu |
 |---|---|---|
 | `/health`, `/openapi.json` | public | état de la base, contrat |
 | `/media/{empreinte}.webp` | public | vignette ou favicon du cache (`Cache-Control: immutable`) |
-| `/me` | read | client authentifié |
-| `/pools`, `/pools/{slug}` | read | pools visibles ; volumes, domaines principaux, répartition de l'usage commercial |
+| `POST /account/activate`, `POST /account/login` | public | premier mot de passe avec le code d'invitation (`{email, code, password}`), ou connexion (`{email, password}`) : session `{token, expires_at}`, 201 ; 401 sans révéler la cause. Les échecs comptent par IP |
+| `POST /account/logout`, `PUT /account/password` | read | ferme la session courante ; change le mot de passe (`{current, password}`, 403 si `current` est faux, 409 sans compte) |
+| `/me` | read | client authentifié (nom, scope, e-mail du compte ou `null`) |
+| `/search?q=` | read | recherche dans tous les pools visibles (titre, URL, description ; 2 à 200 caractères), un résultat par URL avec ses pools et rangs, paginée |
+| `/pools`, `/pools/{slug}` | read | pools visibles ; volumes, domaines principaux, répartition de l'usage commercial ; `preview` : jusqu'à 4 vignettes des premiers rangs |
 | `/pools/{slug}/export?format=json\|csv\|md\|txt` | read | le pool entier dans l'ordre de rang, sans définition ni score (`txt` : une URL par ligne) |
 | `/pools/{slug}/items` | read | URLs rangées, paginées (`limit` ≤ 500, `offset`), avec description, type de média, famille de source, vignette et favicon |
 | `/billing` | read | prix des recherches, solde personnel, communautés (rôle, solde, plafond, dépense sur 30 jours) |
@@ -623,11 +643,12 @@ trace une ligne par requête (méthode, chemin, statut, durée, client).
 | `WEBPOOL_API_MAX_CONNECTIONS` | 256 | connexions simultanées au plus ; requête coupée après 30 s, en-têtes incomplets après 15 s, connexion inactive fermée après 5 s |
 | `WEBPOOL_API_TRUST_PROXY` | non | `1` : IP du client lue dans la dernière entrée de `X-Forwarded-For`. À activer seulement derrière un proxy de confiance (alwaysdata : vérifier que l'en-tête est posé) ; sinon toutes les requêtes sans jeton partagent un compteur |
 
-L'API lit le corpus et n'écrit que les recherches payantes et les membres des
-communautés. Pour aller plus loin,
+L'API lit le corpus et n'écrit que les recherches payantes, les membres des
+communautés, les mots de passe et les sessions des comptes. Pour aller plus loin,
 la base peut être ouverte au serveur par un rôle PostgreSQL limité à `SELECT`, plus
 `INSERT, UPDATE` sur `search_request`, `wallet` et `wallet_entry`, `INSERT, UPDATE, DELETE` sur
-`community_member` (gestion des membres) et `USAGE` sur leurs séquences. Les
+`community_member` (gestion des membres), `INSERT, UPDATE, DELETE` sur `api_session` et
+`UPDATE` sur trois colonnes d'`api_client` (comptes), et `USAGE` sur leurs séquences. Les
 achats et les changements de membres se sérialisent par verrous consultatifs, sans
 `SELECT … FOR UPDATE` sur `api_client` ni `community` : ces droits suffisent, ce
 que vérifie un test d'intégration avec un rôle créé ainsi :
@@ -637,6 +658,8 @@ GRANT USAGE ON SCHEMA public TO webpool_api;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO webpool_api;
 GRANT INSERT, UPDATE ON search_request, wallet, wallet_entry TO webpool_api;
 GRANT INSERT, UPDATE, DELETE ON community_member TO webpool_api;
+GRANT UPDATE (password_hash, invite_hash, invite_expires_at) ON api_client TO webpool_api;
+GRANT INSERT, UPDATE, DELETE ON api_session TO webpool_api;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO webpool_api;
 ``` Elle se déploie comme un site Node.js
 (voir *Déploiement*) ; `/api/v1/health` renvoie la version et le commit livré.

@@ -14,6 +14,7 @@ import { addQuery, explore, importQueries, listPipes, listQueries, parseTags } f
 import { checkLine, cycle } from '../src/cycle/index.js';
 import { cacheMedia } from '../src/media/index.js';
 import { checkLinks } from '../src/check/index.js';
+import { inviteAccount } from '../src/api/accounts.js';
 import { addClient, listClients, revokeClient, setPoolAccess } from '../src/api/clients.js';
 import { config } from '../src/config.js';
 import { withPipelineLock } from '../src/lock.js';
@@ -54,6 +55,8 @@ Usage :
   webpool client revoke --name <nom>
   webpool client grant --name <nom> --slug <pool>   (client read : accès au pool)
   webpool client ungrant --name <nom> --slug <pool>
+  webpool account invite --name <client> --email <adresse> [--days 7]
+                                   (compte read : code d'activation affiché une seule fois ; réinvite = réinitialise)
   webpool community add --slug <slug> [--label "…"]
   webpool community list
   webpool community join --slug <communauté> --name <client> [--role owner|member] [--monthly N|none]
@@ -109,6 +112,7 @@ const OPTIONS = {
   id: { type: 'string' },
   days: { type: 'string' },
   by: { type: 'string' },
+  email: { type: 'string' },
   help: { type: 'boolean', short: 'h', default: false },
 };
 
@@ -318,6 +322,18 @@ async function main() {
       await serve({ port, host: values.host ?? config.apiHost, corsOrigins: config.apiCorsOrigins });
       break;
     }
+    case 'account': {
+      if (subcommand !== 'invite') throw new Error(`Sous-commande account inconnue : ${subcommand ?? '(aucune)'}`);
+      if (!values.name || !values.email) throw new Error('account invite : --name et --email requis');
+      const res = await inviteAccount({ name: values.name, email: values.email, days: parsePositive('days', values.days) });
+      console.log(
+        `${res.created ? 'Client read créé' : 'Client existant'} "${res.name}" invité (${res.email}), jusqu'au ${res.expires_at.slice(0, 16).replace('T', ' ')} UTC.
+`
+          + `Code d'activation, affiché une seule fois :
+${res.code}`,
+      );
+      break;
+    }
     case 'client': {
       if (subcommand === 'add') {
         if (!values.name) throw new Error('client add : --name requis');
@@ -328,7 +344,7 @@ async function main() {
         for (const c of rows) {
           const state = c.revoked_at ? `révoqué le ${c.revoked_at.toISOString().slice(0, 10)}` : 'actif';
           console.log(
-            `${c.name.padEnd(20)} ${c.scope.padEnd(5)}  ${state}${c.scope === 'read' ? `  pools : ${c.pools.join(', ') || '(aucun)'}` : ''}`,
+            `${c.name.padEnd(20)} ${c.scope.padEnd(5)}  ${state}${c.email ? `  ${c.email}` : ''}${c.scope === 'read' ? `  pools : ${c.pools.join(', ') || '(aucun)'}` : ''}`,
           );
         }
         if (rows.length === 0) console.log('(aucun client)');

@@ -70,8 +70,8 @@ describe.skipIf(!available)('API HTTP sur PostgreSQL', () => {
   });
 
   it('authentifie par jeton et refuse un jeton révoqué', async () => {
-    expect((await get('/me', admin)).body).toEqual({ name: 'moi', scope: 'admin' });
-    expect((await get('/me', reader)).body).toEqual({ name: 'client-a', scope: 'read' });
+    expect((await get('/me', admin)).body).toEqual({ name: 'moi', scope: 'admin', email: null });
+    expect((await get('/me', reader)).body).toEqual({ name: 'client-a', scope: 'read', email: null });
     const temp = await clients.addClient({ name: 'jetable' });
     expect((await get('/me', temp)).status).toBe(200);
     await clients.revokeClient({ name: 'jetable' });
@@ -262,6 +262,135 @@ describe.skipIf(!available)('API HTTP sur PostgreSQL', () => {
     expect((await get('/pools/secret/export?format=txt', reader)).status).toBe(404);
     expect((await get('/pools/lora/export?format=xml', reader)).status).toBe(400);
     expect((await get('/pools/lora/export')).status).toBe(401);
+  });
+
+  const send = async (method, path, body, who) => {
+    const res = await fetch(`${base}${path}`, {
+      method,
+      headers: { 'Content-Type': 'application/json', ...(who ? { Authorization: `Bearer ${who.token}` } : {}) },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, body: await res.json() };
+  };
+
+  it('donne à chaque carte de pool ses vignettes et sa répartition par usage', async () => {
+    const { rows } = await db.query(
+      `SELECT pi.url_item_id AS id FROM pool_item pi JOIN pool p ON p.id = pi.pool_id WHERE p.slug = 'lora' ORDER BY pi.rank`,
+    );
+    // rang 1 : vignette en cache ; rang 2 : en échec (ignorée) ; rang 3 : provider en cache
+    await db.query(
+      `INSERT INTO url_media (url_item_id, kind, source_url, status, file) VALUES
+         ($1, 'og', 'https://x/1.png', 'cached', 'a1.webp'),
+         ($2, 'og', 'https://x/2.png', 'failed', NULL),
+         ($3, 'provider', 'https://x/3.png', 'cached', 'c3.webp')`,
+      [rows[0].id, rows[1].id, rows[2].id],
+    );
+    const lora = (await get('/pools', reader)).body.items[0];
+    expect(lora.preview).toEqual(['/api/v1/media/a1.webp', '/api/v1/media/c3.webp']);
+    expect(lora.usage_commercial).toContainEqual({ usage: 'libre', urls: 1 });
+    expect(lora.usage_commercial.reduce((n, u) => n + u.urls, 0)).toBe(3);
+    await db.query('DELETE FROM url_media');
+  });
+
+  it('cherche dans les seuls pools visibles, un résultat par URL', async () => {
+    const forAdmin = (await get('/search?q=lora', admin)).body;
+    expect(forAdmin.q).toBe('lora');
+    expect(forAdmin.total).toBe(3);
+    // le pool secret (limit 1) partage un lien avec lora : ce lien liste les deux
+    const shared = forAdmin.items.filter((i) => i.pools.length === 2);
+    expect(shared).toHaveLength(1);
+    expect(shared[0].pools.map((p) => p.slug)).toEqual(['lora', 'secret']);
+    expect(shared[0].pools[1]).toEqual({ slug: 'secret', label: 'Secret', rank: 1 });
+
+    const forReader = (await get('/search?q=LORA&limit=1', reader)).body;
+    expect(forReader).toMatchObject({ total: 3, limit: 1, offset: 0 });
+    expect(forReader.items[0].pools.map((p) => p.slug)).toEqual(['lora']);
+    expect(Object.keys(forReader.items[0]).sort()).toEqual([
+      'description', 'domain', 'favicon', 'media_type', 'pools', 'source', 'thumbnail', 'title', 'url', 'usage_commercial',
+    ]);
+    // jokers ILIKE littéraux, terme absent, longueur bornée
+    expect((await get('/search?q=50%25', reader)).body.total).toBe(1);
+    expect((await get('/search?q=%25%25', reader)).body.total).toBe(0);
+    expect((await get('/search?q=zzzz', reader)).body.total).toBe(0);
+    expect((await get('/search?q=a', reader)).status).toBe(400);
+    expect((await get('/search?q=lora')).status).toBe(401);
+
+    // un client sans pool accordé ne trouve rien
+    const nobody = await clients.addClient({ name: 'sans-pool' });
+    expect((await get('/search?q=lora', nobody)).body.total).toBe(0);
+  });
+
+  it('invite, active, connecte et déconnecte un compte', async () => {
+    const accounts = await import('../../src/api/accounts.js');
+    const invite = await accounts.inviteAccount({ name: 'camille', email: 'Camille@Atelier.Example' });
+    expect(invite).toMatchObject({ name: 'camille', email: 'camille@atelier.example', created: true });
+    expect(invite.code).toMatch(/^wpi_/);
+    await clients.setPoolAccess({ name: 'camille', slug: 'lora', granted: true });
+    const email = 'camille@atelier.example';
+    const password = 'un mot de passe long';
+
+    // pas encore de mot de passe : pas de connexion
+    expect((await send('POST', '/account/login', { email, password })).status).toBe(401);
+    // activation : code faux, mot de passe trop court, puis la bonne
+    expect((await send('POST', '/account/activate', { email, code: 'wpi_faux', password })).body.error.code).toBe('invalid_invitation');
+    expect((await send('POST', '/account/activate', { email, code: invite.code, password: 'court' })).status).toBe(400);
+    const first = await send('POST', '/account/activate', { email: 'CAMILLE@atelier.example', code: invite.code, password });
+    expect(first.status).toBe(201);
+    expect(first.body.token).toMatch(/^wps_/);
+    expect(new Date(first.body.expires_at).getTime()).toBeGreaterThan(Date.now() + 29 * 86_400_000);
+    // code à usage unique
+    expect((await send('POST', '/account/activate', { email, code: invite.code, password })).status).toBe(401);
+
+    expect((await get('/me', first.body)).body).toEqual({ name: 'camille', scope: 'read', email });
+    expect((await get('/pools', first.body)).body.items.map((p) => p.slug)).toEqual(['lora']);
+
+    // connexion : mauvais mot de passe, e-mail inconnu, champ manquant, puis la bonne
+    expect((await send('POST', '/account/login', { email, password: 'pas le bon du tout' })).body.error.code).toBe('invalid_credentials');
+    expect((await send('POST', '/account/login', { email: 'inconnu@atelier.example', password })).status).toBe(401);
+    expect((await send('POST', '/account/login', { email })).status).toBe(400);
+    const second = (await send('POST', '/account/login', { email, password })).body;
+
+    // changement de mot de passe : révoque les autres sessions, garde la courante
+    expect((await send('PUT', '/account/password', { current: 'faux', password: 'nouveau mot de passe' }, second)).status).toBe(403);
+    expect((await send('PUT', '/account/password', { current: password, password: 'nouveau mot de passe' }, second)).status).toBe(200);
+    expect((await get('/me', first.body)).status).toBe(401);
+    expect((await get('/me', second)).status).toBe(200);
+    expect((await send('POST', '/account/login', { email, password: 'nouveau mot de passe' })).status).toBe(201);
+
+    // déconnexion : la session ne sert plus
+    expect((await send('POST', '/account/logout', {}, second)).body).toEqual({ ok: true });
+    expect((await get('/me', second)).status).toBe(401);
+    // un client sans compte : logout sans effet, pas de changement de mot de passe
+    expect((await send('POST', '/account/logout', {}, reader)).status).toBe(200);
+    expect((await get('/me', reader)).status).toBe(200);
+    expect((await send('PUT', '/account/password', { current: 'x', password: 'nouveau mot de passe' }, reader)).status).toBe(409);
+
+    // session expirée : refusée
+    const third = (await send('POST', '/account/login', { email, password: 'nouveau mot de passe' })).body;
+    await db.query("UPDATE api_session SET expires_at = now() - interval '1 second'");
+    expect((await get('/me', third)).status).toBe(401);
+
+    // réinvitation : mot de passe effacé ; client révoqué : plus de connexion
+    const again = await accounts.inviteAccount({ name: 'camille', email, days: 1 });
+    expect(again.created).toBe(false);
+    expect((await send('POST', '/account/login', { email, password: 'nouveau mot de passe' })).status).toBe(401);
+    const back = (await send('POST', '/account/activate', { email, code: again.code, password })).body;
+    await clients.revokeClient({ name: 'camille' });
+    expect((await get('/me', back)).status).toBe(401);
+    expect((await send('POST', '/account/login', { email, password })).status).toBe(401);
+  });
+
+  it('refuse une invitation pour un admin, un client révoqué ou un e-mail déjà pris', async () => {
+    const { inviteAccount } = await import('../../src/api/accounts.js');
+    await expect(inviteAccount({ name: 'moi', email: 'moi@example.org' })).rejects.toThrow(/seul un client read/);
+    await expect(inviteAccount({ name: 'camille', email: 'autre@example.org' })).rejects.toThrow(/révoqué/);
+    await expect(inviteAccount({ name: 'client-a', email: 'camille@atelier.example' })).rejects.toThrow(/déjà rattaché/);
+    await expect(inviteAccount({ name: 'client-a', email: 'pas-un-email' })).rejects.toThrow(/E-mail invalide/);
+    await expect(inviteAccount({ name: 'client-a', email: 'a@example.org', days: 0 })).rejects.toThrow(/--days/);
+    const ok = await inviteAccount({ name: 'client-a', email: 'a@example.org' });
+    expect(ok.created).toBe(false);
+    // le jeton brut du client reste valable
+    expect((await get('/me', reader)).body.email).toBe('a@example.org');
   });
 
   it('serve démarre, répond et s\u2019arrête sur SIGTERM', async () => {

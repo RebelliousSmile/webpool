@@ -5,6 +5,7 @@ import { query } from '../db.js';
 import { MEDIA_FILE_RE, mediaUrl } from '../media/files.js';
 import { mediaOf, sourceOf } from '../media/kinds.js';
 import { poolGrantedSql } from '../access.js';
+import * as accounts from './accounts.js';
 import { stats } from '../stats.js';
 import { USAGE_VALUES } from '../domains/index.js';
 import { QUERY_STATUSES, listQueries } from '../explore/index.js';
@@ -83,7 +84,55 @@ export async function health() {
 }
 
 export async function me({ client }) {
-  return { body: { name: client.name, scope: client.scope } };
+  return { body: { name: client.name, scope: client.scope, email: client.email ?? null } };
+}
+
+// --- Comptes : connexion par e-mail et mot de passe (voir accounts.js).
+
+const invalidCredentials = () => new ApiError(401, 'invalid_credentials', 'E-mail ou mot de passe incorrect');
+
+function textField(body, name) {
+  const value = body?.[name];
+  if (typeof value !== 'string' || value === '') throw badRequest(`${name} attendu (texte non vide)`);
+  return value;
+}
+
+function newPassword(body, name = 'password') {
+  const value = textField(body, name);
+  const problem = accounts.passwordProblem(value);
+  if (problem) throw badRequest(problem);
+  return value;
+}
+
+export async function activateAccountHandler({ body }) {
+  const email = textField(body, 'email');
+  const code = textField(body, 'code');
+  const session = await accounts.activateAccount({ email, code, password: newPassword(body) });
+  if (!session) throw new ApiError(401, 'invalid_invitation', 'Invitation invalide, expirée ou déjà utilisée');
+  return { status: 201, body: session };
+}
+
+export async function loginHandler({ body }) {
+  const email = textField(body, 'email');
+  const password = textField(body, 'password');
+  if (password.length > accounts.PASSWORD_MAX) throw invalidCredentials();
+  const session = await accounts.login({ email, password });
+  if (!session) throw invalidCredentials();
+  return { status: 201, body: session };
+}
+
+export async function logoutHandler({ client }) {
+  await accounts.logout({ sessionId: client.sessionId });
+  return { body: { ok: true } };
+}
+
+export async function changePasswordHandler({ client, body }) {
+  const current = textField(body, 'current');
+  const password = newPassword(body);
+  const changed = await accounts.changePassword({ clientId: client.id, sessionId: client.sessionId, current, password });
+  if (changed === null) throw new ApiError(409, 'no_account', 'Ce client n’a pas de compte (pas de mot de passe)');
+  if (!changed) throw new ApiError(403, 'invalid_credentials', 'Mot de passe actuel incorrect');
+  return { body: { ok: true } };
 }
 
 // --- Pools : visibles par l'admin ; pour un client `read`, les pools publics,
@@ -104,18 +153,41 @@ async function visiblePool(client, slug) {
   return rows[0];
 }
 
+// Aperçu d'une carte de pool : jusqu'à PREVIEW_THUMBS vignettes en cache, prises
+// parmi les PREVIEW_SCAN premiers rangs, et la répartition par usage commercial.
+const PREVIEW_THUMBS = 4;
+const PREVIEW_SCAN = 50;
+
 export async function listPools({ client }) {
   const { rows } = await query(
     // Filtrer d'abord, compter ensuite : seuls les pools visibles sont comptés,
     // par l'index (pool_id, rank).
     `SELECT p.slug, p.label, p.public, p.refreshed_at,
-            (SELECT count(*)::int FROM pool_item pi WHERE pi.pool_id = p.id) AS items
+            (SELECT count(*)::int FROM pool_item pi WHERE pi.pool_id = p.id) AS items,
+            ARRAY(SELECT t.file FROM (
+                    SELECT pi.rank,
+                           (SELECT m.file FROM url_media m
+                             WHERE m.url_item_id = pi.url_item_id AND m.status = 'cached'
+                             ORDER BY m.kind = 'og' DESC LIMIT 1) AS file
+                      FROM pool_item pi WHERE pi.pool_id = p.id ORDER BY pi.rank LIMIT $3) t
+                   WHERE t.file IS NOT NULL ORDER BY t.rank LIMIT $4) AS preview,
+            (SELECT coalesce(json_agg(u ORDER BY u.urls DESC), '[]') FROM (
+                    SELECT dp.usage_commercial AS usage, count(*)::int AS urls
+                      FROM pool_item pi
+                      JOIN url_item ui ON ui.id = pi.url_item_id
+                      LEFT JOIN domain_profile dp ON dp.domain = ui.domain
+                     WHERE pi.pool_id = p.id
+                     GROUP BY dp.usage_commercial) u) AS usage_commercial
        FROM pool p
       WHERE $1 OR ${GRANTED_SQL('$2')}
       ORDER BY p.slug`,
-    [isAdmin(client), client.id],
+    [isAdmin(client), client.id, PREVIEW_SCAN, PREVIEW_THUMBS],
   );
-  return { body: { items: rows.map((r) => ({ ...r, refreshed_at: iso(r.refreshed_at) })) } };
+  return {
+    body: {
+      items: rows.map((r) => ({ ...r, refreshed_at: iso(r.refreshed_at), preview: r.preview.map(mediaUrl) })),
+    },
+  };
 }
 
 export async function getPool({ client, params }) {
@@ -178,6 +250,44 @@ export async function listPoolItems({ client, params, query: qs }) {
     return isAdmin(client) ? { ...item, id: num(r.id), score: num(r.score) } : item;
   });
   return { body: paged(items, total, page) };
+}
+
+// Recherche dans tous les pools visibles : un résultat par URL, avec les pools
+// (visibles) qui la contiennent et son rang dans chacun.
+export const SEARCH_MIN = 2;
+export const SEARCH_MAX = 200;
+
+export async function search({ client, query: qs }) {
+  const text = (qs.get('q') ?? '').trim();
+  if (text.length < SEARCH_MIN || text.length > SEARCH_MAX) {
+    throw badRequest(`q doit compter entre ${SEARCH_MIN} et ${SEARCH_MAX} caractères`);
+  }
+  const page = pageParams(qs);
+  const visible = `pool_item spi JOIN pool p ON p.id = spi.pool_id
+                    WHERE spi.url_item_id = ui.id AND ($1 OR ${GRANTED_SQL('$2')})`;
+  const { rows, total } = await selectPage({
+    select: `ui.id, ui.canonical_url, ui.domain, ui.title, dp.usage_commercial,
+             ui.description, ui.media_type, ${THUMB_SQL}, ${FAVICON_SQL},
+             (SELECT json_agg(json_build_object('slug', p.slug, 'label', p.label, 'rank', spi.rank) ORDER BY p.slug)
+                FROM ${visible}) AS pools`,
+    from: `url_item ui LEFT JOIN domain_profile dp ON dp.domain = ui.domain`,
+    where: [
+      `EXISTS (SELECT 1 FROM ${visible})`,
+      `(ui.title ILIKE $3 OR ui.canonical_url ILIKE $3 OR ui.description ILIKE $3)`,
+    ],
+    values: [isAdmin(client), client.id, likePattern(text)],
+    order: 'ui.quality_score DESC NULLS LAST, ui.id',
+    page,
+  });
+  const items = rows.map((r) => ({
+    url: r.canonical_url,
+    domain: r.domain,
+    title: r.title,
+    usage_commercial: r.usage_commercial,
+    ...mediaFields(r, r.canonical_url),
+    pools: r.pools,
+  }));
+  return { body: { q: text, ...paged(items, total, page) } };
 }
 
 const EXPORT_TYPES = { json: 'application/json', csv: 'text/csv', md: 'text/markdown', txt: 'text/plain' };

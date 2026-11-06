@@ -24,6 +24,10 @@
       "description": "Clients read et admin"
     },
     {
+      "name": "comptes",
+      "description": "Connexion par e-mail et mot de passe (comptes invités)"
+    },
+    {
       "name": "admin",
       "description": "Clients admin"
     }
@@ -143,6 +147,257 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/search": {
+      "get": {
+        "summary": "Recherche dans tous les pools visibles : titre, URL et description",
+        "tags": [
+          "pools"
+        ],
+        "description": "Un résultat par URL, triées par qualité ; chaque résultat liste les pools visibles qui la contiennent.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 200
+            }
+          },
+          {
+            "$ref": "#/components/parameters/limit"
+          },
+          {
+            "$ref": "#/components/parameters/offset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Page"
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "items",
+                        "q"
+                      ],
+                      "properties": {
+                        "q": {
+                          "type": "string"
+                        },
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/SearchResult"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/account/login": {
+      "post": {
+        "summary": "Connexion par e-mail et mot de passe : ouvre une session de 30 jours",
+        "tags": [
+          "comptes"
+        ],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginInput"
+              }
+            }
+          }
+        },
+        "description": "Chaque échec compte contre l'adresse IP, comme un jeton invalide ; au-delà de la limite, 429 avant toute vérification.",
+        "responses": {
+          "201": {
+            "description": "Session ouverte",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "description": "E-mail ou mot de passe incorrect (`invalid_credentials`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/account/activate": {
+      "post": {
+        "summary": "Activation d'un compte invité : premier mot de passe, avec le code d'invitation",
+        "tags": [
+          "comptes"
+        ],
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivateInput"
+              }
+            }
+          }
+        },
+        "description": "Le code, à usage unique, vient de `webpool account invite` (valable 7 jours par défaut). Pas d'inscription libre.",
+        "responses": {
+          "201": {
+            "description": "Compte activé, session ouverte",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "description": "Invitation invalide, expirée ou déjà utilisée (`invalid_invitation`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/account/logout": {
+      "post": {
+        "summary": "Déconnexion : révoque la session courante (sans effet pour un jeton brut)",
+        "tags": [
+          "comptes"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ok"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/account/password": {
+      "put": {
+        "summary": "Change le mot de passe et révoque les autres sessions du compte",
+        "tags": [
+          "comptes"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ok"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Mot de passe actuel incorrect (`invalid_credentials`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Client sans compte (`no_account`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
@@ -1809,7 +2064,8 @@
         "type": "object",
         "required": [
           "name",
-          "scope"
+          "scope",
+          "email"
         ],
         "properties": {
           "name": {
@@ -1821,6 +2077,13 @@
               "admin",
               "read"
             ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "E-mail du compte (connexion par mot de passe) ; null pour un client sans compte"
           }
         }
       },
@@ -1831,7 +2094,9 @@
           "label",
           "public",
           "refreshed_at",
-          "items"
+          "items",
+          "preview",
+          "usage_commercial"
         ],
         "properties": {
           "slug": {
@@ -1853,6 +2118,43 @@
           "public": {
             "type": "boolean",
             "description": "pool public : visible par tout client authentifié"
+          },
+          "preview": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {
+              "type": "string"
+            },
+            "description": "Jusqu'à 4 chemins de vignettes en cache, prises parmi les 50 premiers rangs, à résoudre contre l'origine de l'API"
+          },
+          "usage_commercial": {
+            "type": "array",
+            "description": "Répartition des liens par usage commercial du domaine",
+            "items": {
+              "type": "object",
+              "required": [
+                "usage",
+                "urls"
+              ],
+              "properties": {
+                "usage": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "libre",
+                    "sous-conditions",
+                    "payant",
+                    "non-commercial",
+                    null
+                  ]
+                },
+                "urls": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         }
       },
@@ -3303,6 +3605,200 @@
           "invited_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "SearchResult": {
+        "type": "object",
+        "required": [
+          "description",
+          "domain",
+          "favicon",
+          "media_type",
+          "source",
+          "thumbnail",
+          "title",
+          "url",
+          "usage_commercial",
+          "pools"
+        ],
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "usage_commercial": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "libre",
+              "sous-conditions",
+              "payant",
+              "non-commercial",
+              null
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Description de la page (og:description ou meta description)"
+          },
+          "media_type": {
+            "type": "string",
+            "enum": [
+              "page",
+              "image",
+              "video",
+              "pdf",
+              "data",
+              "code",
+              "model"
+            ],
+            "description": "Type de média : fixé à la normalisation (Content-Type, og:type, URL), déduit de l'URL pour les liens plus anciens"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "research",
+              "archives",
+              "stock",
+              "community",
+              "video",
+              "press",
+              "other"
+            ],
+            "description": "Famille de source, d'après le domaine"
+          },
+          "thumbnail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Chemin de la vignette en cache (WebP, 480 px de large au plus), à résoudre contre l'origine de l'API ; null si aucune"
+          },
+          "favicon": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Chemin du favicon du domaine en cache (WebP 64 px) ; null si aucun"
+          },
+          "pools": {
+            "type": "array",
+            "description": "Pools visibles contenant le lien, avec son rang",
+            "items": {
+              "type": "object",
+              "required": [
+                "slug",
+                "label",
+                "rank"
+              ],
+              "properties": {
+                "slug": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "rank": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "required": [
+          "token",
+          "expires_at"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Jeton de session (`wps_…`), à envoyer en `Authorization: Bearer` ; montré une seule fois"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Ok": {
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
+      "LoginInput": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "ActivateInput": {
+        "type": "object",
+        "required": [
+          "email",
+          "code",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "Code d'invitation (`wpi_…`) remis par l'admin"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 12,
+            "maxLength": 200
+          }
+        }
+      },
+      "PasswordInput": {
+        "type": "object",
+        "required": [
+          "current",
+          "password"
+        ],
+        "properties": {
+          "current": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 12,
+            "maxLength": 200
           }
         }
       }

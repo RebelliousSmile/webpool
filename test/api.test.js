@@ -391,3 +391,74 @@ describe('serveur — limitation de débit', () => {
     expect(authCalls).toBe(before);
   });
 });
+
+describe('routes d’identifiants (credentials)', () => {
+  const routesCred = [
+    {
+      path: '/login',
+      method: 'POST',
+      scope: null,
+      credentials: true,
+      handler: async ({ body }) => {
+        if (body?.password !== 'bon') throw new ApiError(401, 'invalid_credentials', 'non');
+        return { status: 201, body: { token: 'wps_x' } };
+      },
+    },
+  ].map((r) => compileRoute({ method: 'GET', ...r }));
+  let server;
+  let base;
+  let calls = 0;
+
+  beforeAll(async () => {
+    const wrapped = routesCred.map((r) => ({ ...r, handler: async (ctx) => ((calls += 1), r.handler(ctx)) }));
+    // Limiteur espion : seules les clés auth: sont bornées (2 échecs), l'IP ne l'est pas.
+    const counts = {};
+    const rateLimiter = {
+      take: (k) => ((counts[k] = (counts[k] ?? 0) + 1), { ok: true }),
+      peek: (k) => (k.startsWith('auth:') && (counts[k] ?? 0) >= 2 ? { ok: false, retryAfter: 60 } : { ok: true }),
+    };
+    server = createApiServer({ routes: wrapped, authenticate: async () => null, rateLimiter });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    base = `http://127.0.0.1:${server.address().port}`;
+  });
+
+  afterAll(() => new Promise((resolve) => server.close(resolve)));
+
+  const login = (password) =>
+    fetch(`${base}/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+
+  it('compte chaque échec contre l’IP et bloque avant le handler au-delà de la limite', async () => {
+    expect((await login('bon')).status).toBe(201); // un succès ne compte pas comme échec
+    for (let i = 0; i < 2; i += 1) expect((await login('faux')).status).toBe(401);
+    const before = calls;
+    const res = await login('faux');
+    expect(res.status).toBe(429);
+    expect(calls).toBe(before);
+    expect((await login('bon')).status).toBe(429); // même le bon mot de passe attend
+  });
+});
+
+describe('comptes : mots de passe et e-mails', async () => {
+  const accounts = await import('../src/api/accounts.js');
+
+  it('hache en scrypt avec sel et vérifie en temps constant', async () => {
+    const fast = { N: 1024, r: 8, p: 1 };
+    const h = await accounts.hashPassword('correct horse battery', fast);
+    expect(h).toMatch(/^scrypt\$1024\$8\$1\$[\w-]+\$[\w-]+$/);
+    expect(await accounts.hashPassword('correct horse battery', fast)).not.toBe(h);
+    expect(await accounts.verifyPassword('correct horse battery', h)).toBe(true);
+    expect(await accounts.verifyPassword('correct horse batterie', h)).toBe(false);
+    expect(await accounts.verifyPassword('x', 'bcrypt$...')).toBe(false);
+    expect(await accounts.verifyPassword('x', null)).toBe(false);
+  });
+
+  it('valide e-mails et mots de passe', () => {
+    expect(accounts.normalizeEmail('  Camille@Atelier.Example ')).toBe('camille@atelier.example');
+    expect(accounts.validEmail('camille@atelier.example')).toBe(true);
+    for (const bad of ['camille', 'a@b', 'a b@c.d', '@c.d', `${'a'.repeat(250)}@b.cd`]) expect(accounts.validEmail(bad)).toBe(false);
+    expect(accounts.passwordProblem('a'.repeat(12))).toBeNull();
+    expect(accounts.passwordProblem('court')).toMatch(/trop court/);
+    expect(accounts.passwordProblem('a'.repeat(201))).toMatch(/trop long/);
+    expect(accounts.passwordProblem(42)).toMatch(/attendu/);
+  });
+});

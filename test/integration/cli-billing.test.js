@@ -101,4 +101,16 @@ describe.skipIf(!available)('CLI : communautés, portefeuilles, recherches', () 
     expect(res).toMatchObject({ code: 1, out: expect.stringContaining('cycle ou requests run en cours') });
     expect((await cli('normalize', '--offline')).code).toBe(0);
   });
+
+  it('account invite : code affiché une fois, client read créé ou rattaché', async () => {
+    const first = await cli('account', 'invite', '--name', 'camille', '--email', 'camille@atelier.example');
+    expect(first.code).toBe(0);
+    expect(first.out).toMatch(/Client read créé "camille" invité \(camille@atelier\.example\)/);
+    expect(first.out).toMatch(/\nwpi_[\w-]+\n/);
+    expect((await cli('account', 'invite', '--name', 'alice', '--email', 'alice@example.org', '--days', '3')).out)
+      .toContain('Client existant "alice"');
+    expect((await cli('client', 'list')).out).toMatch(/camille\s+read\s+actif\s+camille@atelier\.example/);
+    expect((await cli('account', 'invite', '--name', 'bob')).out).toContain('--name et --email requis');
+    expect((await cli('account', 'reset')).out).toContain('Sous-commande account inconnue');
+  });
 });
