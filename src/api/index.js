@@ -17,7 +17,14 @@ export const routes = [
   { path: '/api/v1/openapi.json', scope: null, handler: openapi },
   // Lecture seule du cache, fichiers immuables : hors limitation de débit.
   { path: '/api/v1/media/:file', scope: null, unlimited: true, handler: h.getMedia },
+  // Connexion par compte : publiques, limitées comme une authentification
+  // (`credentials` : les échecs comptent contre l'IP).
+  { path: '/api/v1/account/login', method: 'POST', scope: null, credentials: true, handler: h.loginHandler },
+  { path: '/api/v1/account/activate', method: 'POST', scope: null, credentials: true, handler: h.activateAccountHandler },
+  { path: '/api/v1/account/logout', method: 'POST', scope: 'read', handler: h.logoutHandler },
+  { path: '/api/v1/account/password', method: 'PUT', scope: 'read', handler: h.changePasswordHandler },
   { path: '/api/v1/me', scope: 'read', handler: h.me },
+  { path: '/api/v1/search', scope: 'read', handler: h.search },
   { path: '/api/v1/pools', scope: 'read', handler: h.listPools },
   { path: '/api/v1/pools/:slug', scope: 'read', handler: h.getPool },
   { path: '/api/v1/pools/:slug/items', scope: 'read', handler: h.listPoolItems },

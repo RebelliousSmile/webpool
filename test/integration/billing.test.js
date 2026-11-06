@@ -512,7 +512,7 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
       await db.query(`DROP ROLE IF EXISTS ${role}`).catch(() => {});
     });
 
-    it('achat, annulation et gestion des membres avec les seuls GRANT du README', async () => {
+    it('achat, annulation, gestion des membres et comptes avec les seuls GRANT du README', async () => {
       await db.query(`DROP ROLE IF EXISTS ${role}`);
       await db.query(`CREATE ROLE ${role} LOGIN PASSWORD 'api'`);
       for (const sql of [
@@ -520,10 +520,14 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
         `GRANT SELECT ON ALL TABLES IN SCHEMA ${SCHEMA} TO ${role}`,
         `GRANT INSERT, UPDATE ON search_request, wallet, wallet_entry TO ${role}`,
         `GRANT INSERT, UPDATE, DELETE ON community_member TO ${role}`,
+        `GRANT UPDATE (password_hash, invite_hash, invite_expires_at) ON api_client TO ${role}`,
+        `GRANT INSERT, UPDATE, DELETE ON api_session TO ${role}`,
         `GRANT USAGE ON ALL SEQUENCES IN SCHEMA ${SCHEMA} TO ${role}`,
       ]) {
         await db.query(sql);
       }
+      const { inviteAccount } = await import('../../src/api/accounts.js');
+      const { code } = await inviteAccount({ name: 'carol', email: 'carol@example.org' });
       const url = new URL(BASE_URL);
       url.username = role;
       url.password = 'api';
@@ -532,22 +536,31 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
       const script = `
         import { createRequest, cancelRequest } from '${root}src/requests/index.js';
         import { ownerSetMember } from '${root}src/billing/index.js';
+        import * as accounts from '${root}src/api/accounts.js';
         import { closePool } from '${root}src/db.js';
         const a = JSON.parse(process.argv[1]);
         const res = await createRequest({ ...a.buy, prices: a.prices });
         await cancelRequest({ id: res.request.id, clientId: a.buy.clientId });
         const m = await ownerSetMember(a.member);
-        console.log(JSON.stringify({ id: res.request.id, member: m }));
+        const first = await accounts.activateAccount(a.account);
+        const second = await accounts.login(a.account);
+        const session = await accounts.sessionClient(second.token);
+        const changed = await accounts.changePassword({ clientId: session.id, sessionId: session.sessionId,
+          current: a.account.password, password: 'encore un autre mot' });
+        await accounts.logout(session);
+        const gone = await accounts.sessionClient(first.token);
+        console.log(JSON.stringify({ id: res.request.id, member: m, changed, gone }));
         await closePool();`;
       const args = {
         prices: PRICES,
         buy: { clientId: who.carol.id, provider: 'brave', query: 'role', idempotencyKey: 'r-1' },
         member: { clientId: who.alice.id, community: 'atelier', name: 'dave' },
+        account: { email: 'carol@example.org', code, password: 'un mot de passe long' },
       };
       const { stdout } = await run(process.execPath, ['--input-type=module', '-e', script, JSON.stringify(args)], {
         env: { ...process.env, DATABASE_URL: url.toString() },
       });
-      expect(JSON.parse(stdout)).toMatchObject({ id: expect.any(Number), member: { name: 'dave', accepted: false } });
+      expect(JSON.parse(stdout)).toMatchObject({ id: expect.any(Number), member: { name: 'dave', accepted: false }, changed: true, gone: null });
       expect(await balanceOf({ name: 'carol' })).toBe(1000);
     });
   });

@@ -5,6 +5,11 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions [Sem
 
 ## [Unreleased]
 
+### Added
+
+- Comptes clients sur invitation : `webpool account invite --name <client> --email <adresse> [--days 7]` (code à usage unique, affiché une fois) ; API `POST /account/activate`, `/account/login`, `/account/logout`, `/account/password` ; session `wps_` de 30 jours, fermée au changement de mot de passe sur les autres appareils ; le jeton `wp_` reste accepté. Migration `014_account` (e-mail du client, table `api_session`).
+- Recherche globale `GET /search` dans tous les pools visibles par le client, avec le pool et le rang de chaque lien.
+
 ## [v0.2.0] - 2026-11-03
 
 ### Added
