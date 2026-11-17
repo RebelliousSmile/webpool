@@ -503,6 +503,8 @@ export async function billing({ client }) {
       funding_url: config.fundingUrl,
       max_queued: config.requestMaxQueued,
       prices: currentPrices().map(({ provider, unit_price, max_pages }) => ({ provider, unit_price, max_pages })),
+      // listes de liens soumises par les membres, pour les pools de leur communauté
+      lists: { price_per_link: config.listPricePerLink, max_links: config.listMaxLinks },
       personal: wallets.personal,
       communities: wallets.communities,
       invitations: invitations.map((i) => ({ ...i, invited_at: iso(i.invited_at) })),
@@ -554,7 +556,7 @@ export async function listClientRequests({ client, query: qs }) {
 
 export async function postRequest({ client, body, headers = {} }) {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) throw badRequest('Objet JSON attendu');
-  const known = new Set(['query', 'provider', 'pages', 'pool', 'community']);
+  const known = new Set(['query', 'provider', 'pages', 'pool', 'community', 'links']);
   const unknown = Object.keys(body).filter((k) => !known.has(k));
   if (unknown.length) throw badRequest(`Champ inconnu : ${unknown.join(', ')}`);
   for (const key of ['query', 'provider', 'pool', 'community']) {
@@ -569,6 +571,7 @@ export async function postRequest({ client, body, headers = {} }) {
       pages: body.pages,
       pool: body.pool || undefined,
       community: body.community || undefined,
+      links: body.links,
       idempotencyKey: headers['idempotency-key'] ?? null,
     }),
   );

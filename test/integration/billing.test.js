@@ -428,6 +428,59 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
     });
   });
 
+  describe('listes de liens des communautés', () => {
+    const list = (name, args) =>
+      requests.createRequest({ clientId: who[name].id, prices: PRICES, listPricing: { perLink: 1, maxLinks: 5 }, provider: 'list', ...args });
+
+    it('soumission : pool de communauté, payée par le pot au prix par lien ; jamais en personnel', async () => {
+      const links = ['https://unsplash.com/photos/kyoto', { url: 'https://nagasaki.example/dejima', title: 'Dejima' }, 'https://unsplash.com/photos/kyoto'];
+      const res = await list('bob', { query: 'Japon : sélection', pool: 'lora', links });
+      expect(res).toMatchObject({ balance: 48, request: { provider: 'list', links: 2, price: 2, community: 'atelier', pages: 1 } });
+      // carol voit lora (accord direct) mais n'est pas membre : pas de liste en personnel
+      await expect(list('carol', { query: 'q', pool: 'lora', links: ['https://a.jp'] })).rejects.toMatchObject({ code: 'invalid', message: expect.stringContaining('réservée aux pools') });
+      await expect(list('bob', { query: 'q', links: ['https://a.jp'] })).rejects.toMatchObject({ code: 'invalid' });
+      await expect(list('bob', { query: 'q', pool: 'lora', links: ['ftp://a.jp'] })).rejects.toMatchObject({ code: 'invalid' });
+      await expect(list('bob', { query: 'q', pool: 'lora', links: Array.from({ length: 6 }, (_, i) => `https://a.jp/${i}`) }))
+        .rejects.toMatchObject({ code: 'invalid', message: expect.stringContaining('5 liens au plus') });
+      await expect(buy('bob', { query: 'q', pool: 'lora', links: ['https://a.jp'] })).rejects.toMatchObject({ message: expect.stringContaining('réservé au provider list') });
+      // le plafond du membre s'applique comme à une recherche (15 giri, 2 déjà engagés)
+      await expect(list('bob', { query: 'q', pool: 'lora', listPricing: { perLink: 7, maxLinks: 5 }, links: ['https://a.jp/1', 'https://a.jp/2'] }))
+        .rejects.toMatchObject({ code: 'spend_limit' });
+      await expectLedgerConsistent();
+    });
+
+    it("examen identique à une recherche : ingestion tracée, normalize, classify, entrée dans le pool par include_requests", async () => {
+      const r = await list('bob', {
+        query: 'Japon sélection',
+        pool: 'lora',
+        links: [{ url: 'https://unsplash.com/photos/kyoto-temple', title: 'Kyoto temple' }, 'https://github.com/kohya-ss/sd-scripts'],
+      });
+      // le vrai ingest : le provider list ne fait aucun appel réseau
+      const res = await requests.runRequests({ offline: true });
+      expect(res.ok).toBe(true);
+      expect(res.requests).toEqual([expect.objectContaining({ id: r.request.id, calls: 1, newUrls: 1, refunded: 0, error: null })]);
+      const item = (await requests.listRequests({ clientId: who.bob.id })).items[0];
+      expect(item).toMatchObject({ status: 'done', provider: 'list', links: 2, results: 2, new_urls: 1, in_pool: 2 });
+      // la photo hors thème entre par include_requests ; le lien déjà connu y était
+      expect(await poolDomains('lora')).toEqual(['github.com', 'unsplash.com']);
+      const { rows } = await db.query(
+        `SELECT us.provider, us.query, us.serp_rank, ui.title FROM url_source us JOIN url_item ui ON ui.id = us.url_item_id
+          WHERE us.search_request_id = $1 ORDER BY us.serp_rank`,
+        [r.request.id],
+      );
+      expect(rows.map((x) => [x.provider, x.query, x.serp_rank])).toEqual([['list', 'Japon sélection', 1], ['list', 'Japon sélection', 2]]);
+      expect(rows[0].title).toBe('Kyoto temple');
+    });
+
+    it("le provider list n'entre ni dans la frontière d'exploration ni dans la grille des recherches", async () => {
+      const { addQuery } = await import('../../src/explore/index.js');
+      await expect(addQuery({ provider: 'list', query: 'x' })).rejects.toThrow('Provider inconnu : list');
+      expect(billing.currentPrices({ ...(await import('../../src/config.js')).config, requestProviders: ['list', 'brave'] }).map((p) => p.provider))
+        .toEqual(['brave']);
+      expect((await call('GET', '/billing', who.bob)).body.lists).toEqual({ price_per_link: 1, max_links: 200 });
+    });
+  });
+
   describe('rapport et grand livre', () => {
     it('crédits, giri dépensés nets, coût, marge et encours', async () => {
       await buy('carol', { query: 'r', pages: 2 });

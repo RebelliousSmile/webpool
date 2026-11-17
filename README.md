@@ -441,6 +441,20 @@ est enregistré, une estimation sinon : `billing report` compare recettes et
 coût. Un client ne voit de l'erreur d'une recherche qu'un message générique ;
 l'admin voit le message brut du provider (`/admin/requests`, `requests list`).
 
+**Listes de liens des communautés.** Un membre peut aussi soumettre une liste de
+liens qu'il a réunie (écran « Recherches » de datapool, ou `POST /requests` avec
+`provider: "list"`, un libellé dans `query` et les liens dans `links`). Une liste
+est une recherche du provider virtuel `list`, dont les résultats sont ses propres
+liens : elle passe par le même examen que les liens trouvés par un provider
+(file d'attente, `requests run`, ingestion tracée sous le libellé, `normalize`
+avec la garde réseau, `classify`, vignettes) et suit les mêmes règles d'entrée
+dans le pool (`include_requests`, seuils, domaines exclus). Elle est réservée aux
+pools d'une communauté du membre et payée par le pot, d'un bloc :
+`WEBPOOL_LIST_PRICE_PER_LINK` giri par lien (1 par défaut), le plafond du membre
+s'appliquant. Une liste compte de 1 à `WEBPOOL_LIST_MAX_LINKS` liens (200), en
+http(s), doublons retirés, titres facultatifs ; son libellé sert au classement
+comme une requête. Si l'ingestion échoue, elle est remboursée.
+
 **Pools ouverts aux recherches.** Un pool est défini par des critères : une URL
 trouvée par une recherche n'y entre que si elle les remplit. Avec
 `"include_requests": true` dans sa définition, les URLs classées des recherches
@@ -476,6 +490,8 @@ lien de la page de don ou d'achat. Plan, pistes écartées et remise en question
 | `WEBPOOL_REQUEST_PROVIDERS` | `openrouter,brave` | providers ouverts aux recherches (`file` toujours exclu) |
 | `WEBPOOL_REQUEST_MAX_PAGES` | 3 | pages achetables par recherche |
 | `WEBPOOL_REQUEST_MAX_QUEUED` | 5 | recherches en attente au plus par client |
+| `WEBPOOL_LIST_PRICE_PER_LINK` | 1 | giri par lien d'une liste soumise par un membre (≥ 1) |
+| `WEBPOOL_LIST_MAX_LINKS` | 200 | liens au plus par liste |
 | `WEBPOOL_MIN_CREDIT_CENTS` | 200 | crédit minimal en centimes (`--force` pour passer outre) |
 | `WEBPOOL_MEMBER_DEFAULT_LIMIT` | 1000 | plafond (giri / 30 jours) d'un nouveau membre sans plafond explicite ; `none` : aucun |
 | `WEBPOOL_FUNDING_URL` | aucune | page de don ou d'achat de giri affichée par datapool |
@@ -554,7 +570,7 @@ pnpm webpool client revoke --name client-a
 | `/billing` | read | prix des recherches, solde personnel, communautés (rôle, solde, plafond, dépense sur 30 jours) |
 | `/billing/entries?community=` | read | grand livre personnel, ou de la communauté pour ses propriétaires |
 | `GET /requests?community=&status=` | read | recherches du client, ou de la communauté pour ses propriétaires |
-| `POST /requests` | read | achète une recherche (`{query, provider, pages, pool, community}`), 201 |
+| `POST /requests` | read | achète une recherche (`{query, provider, pages, pool, community}`), ou soumet une liste de liens (`provider: "list"`, `links`), 201 |
 | `DELETE /requests/{id}` | read | annule une recherche en attente, remboursée |
 | `GET /communities/{slug}/members`, `PUT`/`DELETE …/members/{name}` | read (propriétaires) | membres du plus gros apport au plus petit (rôle calculé, fondateur, plafond, dépense, apports, invitation acceptée) ; invitation, plafond, retrait d'un membre ; le rôle ne se donne pas |
 | `POST`/`DELETE /communities/{slug}/invitation`, `DELETE /communities/{slug}/membership` | read | accepter ou décliner une invitation (listées dans `/billing`), quitter une communauté |

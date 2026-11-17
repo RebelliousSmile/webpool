@@ -12,7 +12,7 @@ import { ingest } from '../ingest/index.js';
 import { exclusionFor, loadSaturated } from '../explore/index.js';
 import { processPending, refreshPools } from '../pipeline/index.js';
 import { BillingError, currentPrices, ensureWallet, postEntry, spentLast30Days } from '../billing/index.js';
-import { callCostUsd, checkRequest, parseCallCosts } from '../billing/pricing.js';
+import { LIST_PROVIDER, callCostUsd, checkLinkList, checkRequest, parseCallCosts } from '../billing/pricing.js';
 
 export const REQUEST_STATUSES = ['queued', 'running', 'done', 'failed', 'cancelled'];
 const STATUS_LABELS = { queued: 'en attente', running: 'en cours', done: 'faite', failed: 'en échec', cancelled: 'annulée' };
@@ -32,6 +32,7 @@ export const PUBLIC_ERRORS = {
 // dans le pool qu'elle vise.
 const REQUEST_COLUMNS = `sr.id, sr.provider, sr.query, sr.pages, sr.unit_price, sr.price, sr.refunded, sr.status,
   sr.calls_done, sr.results, sr.new_urls, sr.new_domains, sr.error, sr.error_kind,
+  CASE WHEN sr.links IS NULL THEN NULL ELSE jsonb_array_length(sr.links) END AS links_count,
   CASE WHEN sr.pool_id IS NULL THEN NULL ELSE
     (SELECT count(DISTINCT pi.url_item_id)::int FROM pool_item pi
        JOIN url_source us ON us.url_item_id = pi.url_item_id AND us.search_request_id = sr.id
@@ -53,6 +54,8 @@ export function formatRequest(r, { admin = false } = {}) {
     provider: r.provider,
     query: r.query,
     pages: r.pages,
+    // liste de liens : nombre de liens soumis (null pour une recherche)
+    links: r.links_count ?? null,
     pool: r.pool,
     community: r.community,
     unit_price: Number(r.unit_price),
@@ -98,16 +101,22 @@ export async function createRequest({
   pages,
   pool,
   community,
+  links,
   idempotencyKey = null,
   prices = currentPrices(),
   maxQueued = config.requestMaxQueued,
+  listPricing = { perLink: config.listPricePerLink, maxLinks: config.listMaxLinks },
 }) {
   if (idempotencyKey !== null && !IDEMPOTENCY_KEY_RE.test(idempotencyKey)) {
     throw new BillingError('invalid', 'Idempotency-Key : 1 à 100 caractères parmi A-Z a-z 0-9 _ -');
   }
+  // Une liste de liens (provider `list`) se valide à part : ses liens sont ses
+  // résultats, payés d'un bloc. Ensuite, tout est commun avec les recherches.
+  const isList = provider === LIST_PROVIDER;
   let checked;
   try {
-    checked = checkRequest({ provider, query: text, pages }, prices);
+    if (!isList && links !== undefined) throw new Error('links : réservé au provider list');
+    checked = isList ? checkLinkList({ query: text, links }, listPricing) : checkRequest({ provider, query: text, pages }, prices);
   } catch (err) {
     throw new BillingError('invalid', err.message);
   }
@@ -154,6 +163,11 @@ export async function createRequest({
       }
       if (payers.length === 1) payer = payers[0].slug;
     }
+    // Une liste n'entre que dans un pool de communauté, payée par son pot :
+    // jamais d'injection sur un portefeuille personnel.
+    if (isList && !payer) {
+      throw new BillingError('invalid', "Liste de liens : réservée aux pools d'une de vos communautés (pool requis)");
+    }
     let wallet;
     let member = null;
     if (payer) {
@@ -186,9 +200,10 @@ export async function createRequest({
     }
 
     const { rows } = await db.query(
-      `INSERT INTO search_request (api_client_id, wallet_id, pool_id, provider, query, pages, unit_price, price, idempotency_key)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-      [clientId, wallet.id, poolId, checked.provider, checked.query, checked.pages, checked.unitPrice, price, idempotencyKey],
+      `INSERT INTO search_request (api_client_id, wallet_id, pool_id, provider, query, pages, unit_price, price, idempotency_key, links)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+      [clientId, wallet.id, poolId, checked.provider, checked.query, checked.pages, checked.unitPrice, price, idempotencyKey,
+        isList ? JSON.stringify(checked.links) : null],
     );
     const id = Number(rows[0].id);
     const balance = await postEntry(db, { walletId: wallet.id, delta: -price, kind: 'debit', requestId: id, clientId });
@@ -303,6 +318,8 @@ async function execute(r, { saturated, ingestImpl, estimate, maxChars }) {
         excludeDomains: exclusion.excludeDomains,
         page,
         requestId: Number(r.id),
+        // liste de liens : ses liens sont ses résultats
+        ...(r.provider === LIST_PROVIDER ? { input: r.links } : {}),
       });
     } catch (err) {
       error = String(err.message ?? err).slice(0, 500);

@@ -36,7 +36,7 @@ const jsonResponse = (body, status = 200) =>
 
 describe('providers SERP — contrat {url, rank, title}', () => {
   it('sont tous enregistrés derrière la même abstraction', () => {
-    expect(Object.keys(providers).sort()).toEqual(['brave', 'europeana', 'file', 'flickr', 'openrouter', 'searxng']);
+    expect(Object.keys(providers).sort()).toEqual(['brave', 'europeana', 'file', 'flickr', 'list', 'openrouter', 'searxng']);
     for (const impl of Object.values(providers)) expect(typeof impl.search).toBe('function');
   });
 

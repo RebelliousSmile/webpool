@@ -8,6 +8,7 @@ import * as searxngProvider from './providers/searxng.js';
 import * as europeanaProvider from './providers/europeana.js';
 import * as flickrProvider from './providers/flickr.js';
 import * as openrouterProvider from './providers/openrouter.js';
+import * as listProvider from './providers/list.js';
 
 // Domaine tel que la normalisation le calculera, sans réseau ; une URL invalide
 // ou non http n'a pas de domaine (la normalisation la marquera en erreur).
@@ -26,6 +27,8 @@ export const providers = {
   europeana: europeanaProvider,
   flickr: flickrProvider,
   openrouter: openrouterProvider,
+  // listes de liens des communautés : jamais dans la frontière d'exploration
+  list: listProvider,
 };
 
 // US-03 : chaque URL candidate est insérée (ou retrouvée) dans url_item, et sa

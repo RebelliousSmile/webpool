@@ -86,6 +86,9 @@ export const config = Object.freeze({
     .filter(Boolean),
   requestMaxPages: intEnv('WEBPOOL_REQUEST_MAX_PAGES', 3, 1),
   requestMaxQueued: intEnv('WEBPOOL_REQUEST_MAX_QUEUED', 5, 1),
+  // listes de liens des communautés : giri par lien, liens au plus par liste
+  listPricePerLink: intEnv('WEBPOOL_LIST_PRICE_PER_LINK', 1, 1),
+  listMaxLinks: intEnv('WEBPOOL_LIST_MAX_LINKS', 200, 1),
   // crédit minimal en centimes : sous ce montant, les frais fixes de paiement
   // (≈ 0,25 € par transaction) dépassent la marge
   minCreditCents: intEnv('WEBPOOL_MIN_CREDIT_CENTS', 200, 0),
