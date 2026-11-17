@@ -472,6 +472,54 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
       expect(rows[0].title).toBe('Kyoto temple');
     });
 
+    it("admin : liste gratuite pour n'importe quel pool ; un pool \"only\" ne contient qu'elle", async () => {
+      await db.query(`UPDATE pool SET definition = '{"theme": "photographie", "include_requests": "only"}' WHERE slug = 'autre'`);
+      const r = await requests.createRequest({
+        clientId: who.admin.id,
+        isAdmin: true,
+        provider: 'list',
+        query: 'Japon : sélection',
+        pool: 'autre',
+        links: ['https://unsplash.com/photos/kyoto', { url: 'https://photo-ac.example/nagasaki', title: 'Nagasaki' }],
+      });
+      expect(r).toMatchObject({ balance: 0, request: { price: 0, unit_price: 0, community: null, links: 2 } });
+      const { rows: entries } = await db.query('SELECT count(*)::int AS n FROM wallet_entry WHERE search_request_id = $1', [r.request.id]);
+      expect(entries[0].n).toBe(0);
+      const runRes = await requests.runRequests({ offline: true });
+      expect(runRes.ok).toBe(true);
+      // seul le contenu de la liste, et pas l'URL ia-generative du corpus
+      expect(await poolDomains('autre')).toEqual(['photo-ac.example', 'unsplash.com']);
+      // une liste personnelle d'un membre vers ce pool n'y entre pas
+      await expect(list('carol', { query: 'q', pool: 'autre', links: ['https://a.jp'] })).rejects.toMatchObject({ code: 'not_found' });
+    });
+
+    it('compte rendu par lien : sort de chaque lien, catégorie d’erreur, accès restreint', async () => {
+      const r = await list('bob', {
+        query: 'Japon',
+        pool: 'lora',
+        links: ['https://unsplash.com/photos/a', 'https://github.com/kohya-ss/sd-scripts', 'https://mort.example/404'],
+      });
+      const before = await call('GET', `/requests/${r.request.id}/links`, who.bob);
+      expect(before.body.items.map((l) => [l.position, l.outcome])).toEqual([[1, 'queued'], [2, 'queued'], [3, 'queued']]);
+      await requests.runRequests({ offline: true });
+      // hors ligne rien ne répond 404 : on le simule sur la troisième URL
+      await db.query(`UPDATE url_item SET status = 'error', http_status = 404, error = 'HTTP 404' WHERE raw_url = 'https://mort.example/404'`);
+      const after = await call('GET', `/requests/${r.request.id}/links`, who.bob);
+      expect(after.body.items.map((l) => [l.position, l.url, l.outcome, l.known, l.error_category])).toEqual([
+        [1, 'https://unsplash.com/photos/a', 'in_pool', false, null],
+        [2, 'https://github.com/kohya-ss/sd-scripts', 'in_pool', true, null],
+        [3, 'https://mort.example/404', 'error', false, 'not_found'],
+      ]);
+      expect(after.body.items[2]).not.toHaveProperty('error');
+      // propriétaire de la communauté qui a payé : oui ; un autre client : non ; l'admin voit l'erreur brute
+      expect((await call('GET', `/requests/${r.request.id}/links`, who.alice)).status).toBe(200);
+      expect((await call('GET', `/requests/${r.request.id}/links`, who.carol)).status).toBe(404);
+      expect((await call('GET', `/requests/${r.request.id}/links`, who.admin)).body.items[2]).toMatchObject({ error: 'HTTP 404', http_status: 404 });
+      expect(requests.errorCategory({ error: 'hôte refusé : 10.0.0.1' })).toBe('host_refused');
+      expect(requests.errorCategory({ error: 'HTTP 500', http_status: 500 })).toBe('http_error');
+      expect(requests.errorCategory({ error: 'ETIMEDOUT' })).toBe('network');
+    });
+
     it("le provider list n'entre ni dans la frontière d'exploration ni dans la grille des recherches", async () => {
       const { addQuery } = await import('../../src/explore/index.js');
       await expect(addQuery({ provider: 'list', query: 'x' })).rejects.toThrow('Provider inconnu : list');

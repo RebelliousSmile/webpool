@@ -14,7 +14,7 @@ import {
   BillingError, answerInvitation, currentPrices, invitationsFor, leaveCommunity, listMembers, ownerRemoveMember,
   ownerSetMember, walletEntries, walletsFor,
 } from '../billing/index.js';
-import { REQUEST_STATUSES, cancelRequest, createRequest, listRequests } from '../requests/index.js';
+import { REQUEST_STATUSES, cancelRequest, createRequest, listRequests, requestLinks } from '../requests/index.js';
 import {
   ApiError,
   badRequest,
@@ -636,4 +636,11 @@ export async function declineInvitation({ client, params }) {
 
 export async function leaveCommunityHandler({ client, params }) {
   return { body: await billingCall(() => leaveCommunity({ clientId: client.id, community: params.slug })) };
+}
+
+// Sort de chaque lien d'une recherche ou d'une liste.
+export async function listRequestLinks({ client, params }) {
+  const id = idParam(params.id);
+  const items = await billingCall(() => requestLinks({ id, clientId: client.id, isAdmin: isAdmin(client) }));
+  return { body: { items } };
 }

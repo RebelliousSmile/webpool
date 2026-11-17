@@ -27,6 +27,7 @@ export const routes = [
   { path: '/api/v1/requests', scope: 'read', handler: h.listClientRequests },
   { path: '/api/v1/requests', method: 'POST', scope: 'read', handler: h.postRequest },
   { path: '/api/v1/requests/:id', method: 'DELETE', scope: 'read', handler: h.deleteRequest },
+  { path: '/api/v1/requests/:id/links', scope: 'read', handler: h.listRequestLinks },
   { path: '/api/v1/communities/:slug/members', scope: 'read', handler: h.listCommunityMembers },
   { path: '/api/v1/communities/:slug/invitation', method: 'POST', scope: 'read', handler: h.acceptInvitation },
   { path: '/api/v1/communities/:slug/invitation', method: 'DELETE', scope: 'read', handler: h.declineInvitation },

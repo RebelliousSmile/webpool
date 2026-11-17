@@ -1644,6 +1644,56 @@
           }
         }
       }
+    },
+    "/requests/{id}/links": {
+      "get": {
+        "summary": "Sort de chaque lien d'une recherche ou d'une liste (auteur, propriétaires de la communauté qui a payé, admin)",
+        "tags": [
+          "recherches"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RequestLink"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3077,7 +3127,7 @@
           "links": {
             "type": "array",
             "maxItems": 1000,
-            "description": "provider `list` seulement : liens à examiner (URL, ou {url, title}) ; http(s), doublons retirés, `max_links` au plus. Réservé aux pools d'une communauté du client, payé par son pot ; `query` est alors le libellé de la liste.",
+            "description": "provider `list` seulement : liens à examiner (URL, ou {url, title}) ; http(s), doublons retirés, `max_links` au plus. Pour un membre : réservé aux pools d'une de ses communautés, payé par le pot. Pour un admin sans `community` : gratuit, tout pool. `query` est le libellé de la liste.",
             "items": {
               "oneOf": [
                 {
@@ -3274,6 +3324,94 @@
           "invited_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "RequestLink": {
+        "type": "object",
+        "required": [
+          "position",
+          "url",
+          "canonical_url",
+          "domain",
+          "title",
+          "outcome",
+          "known",
+          "error_category"
+        ],
+        "properties": {
+          "position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "ordre dans la liste soumise, ou rang dans les résultats d'une recherche"
+          },
+          "url": {
+            "type": "string",
+            "description": "URL soumise (liste) ou trouvée (recherche)"
+          },
+          "canonical_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "domain": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "titre de la page lu à la normalisation (il l'emporte sur le titre proposé)"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "examining",
+              "error",
+              "in_pool",
+              "not_in_pool",
+              "in_corpus"
+            ],
+            "description": "queued : liste pas encore ingérée ; examining : en cours de normalisation ou de classement ; in_pool / not_in_pool : classé, entré ou non dans le pool visé (seuils, exclusions) ; in_corpus : classé, sans pool visé"
+          },
+          "known": {
+            "type": "boolean",
+            "description": "URL déjà connue du corpus avant la soumission"
+          },
+          "error_category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "not_found",
+              "host_refused",
+              "http_error",
+              "network",
+              null
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "admin seulement : message brut"
+          },
+          "http_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "admin seulement"
           }
         }
       }

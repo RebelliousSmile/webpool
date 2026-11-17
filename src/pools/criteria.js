@@ -12,7 +12,8 @@
 //   "domains_include": [],               // si non vide : liste blanche
 //   "order": "quality",                  // quality | relevance | recent | composite | rarity
 //   "limit": 50,
-//   "include_requests": true             // + URLs des recherches de ses communautés, hors critères de sujet
+//   "include_requests": true             // + URLs des recherches et listes de ses communautés (ou d'un admin), hors critères de sujet ;
+//                                        //   "only" : uniquement celles-là
 // }
 
 // Rareté : 1 / sqrt(URLs vivantes du domaine) ; une URL d'un domaine unique vaut 1.
@@ -62,7 +63,7 @@ const CHECKS = {
   min_quality: [isUnitNumber, 'un nombre entre 0 et 1'],
   order: [(v) => typeof v === 'string', 'une chaîne'],
   limit: [Number.isInteger, 'un entier'],
-  include_requests: [(v) => typeof v === 'boolean', 'un booléen'],
+  include_requests: [(v) => typeof v === 'boolean' || v === 'only', 'un booléen ou "only"'],
 };
 
 // Une définition vient d'un fichier JSON : chaque critère est typé avant de
@@ -87,6 +88,14 @@ function validateDefinition(definition) {
 // min_relevance et min_quality et domains_exclude s'appliquent toujours.
 export function buildPoolQuery(definition, { poolId = null } = {}) {
   validateDefinition(definition);
+  // "only" ignore les critères de sujet : on les retire avant de construire la
+  // requête, pour qu'aucune de leurs valeurs ne reste en paramètre inutilisé.
+  if (definition.include_requests === 'only' && poolId !== null) {
+    const { theme, subthemes, facets, domains_include: domainsInclude, ...rest } = definition;
+    if (theme || subthemes?.length || Object.keys(facets ?? {}).length || domainsInclude?.length) {
+      return buildPoolQuery(rest, { poolId });
+    }
+  }
   const order = definition.order ?? 'composite';
   if (!Object.hasOwn(ORDERS, order)) {
     throw new Error(`Ordre inconnu : ${order} (attendu : ${Object.keys(ORDERS).join(', ')})`);
@@ -144,30 +153,39 @@ export function buildPoolQuery(definition, { poolId = null } = {}) {
     ` ORDER BY ${ORDERS[order]}, ui.id\n` +
     ` LIMIT ${limitParam}`;
 
-  // Sans critère de sujet, le pool prend déjà toutes les URLs classées.
-  if (!(definition.include_requests && poolId !== null && where.length)) {
-    const text =
-      `SELECT ui.id, ui.canonical_url, ui.domain, ${SCORE_EXPR[order]} AS pool_score\n` +
-      `  FROM url_item ui\n` +
-      (JOINS[order] ?? '') +
-      ` WHERE ${[...always, ...where].join('\n   AND ')}\n` +
-      ` ORDER BY ${ORDERS[order]}, ui.id\n` +
-      ` LIMIT ${limitParam}`;
-    return { text, values };
-  }
-
-  // include_requests : la sélection normale (au plus `limit`), puis, après
-  // elle, les URLs des recherches payées par une communauté propriétaire du
-  // pool qui n'y sont pas déjà (au plus `limit` de plus). Une recherche payée
-  // ne dispute donc pas sa place à la sélection, et un client qui paie sur son
-  // portefeuille personnel n'y injecte rien. IN (sous-requête) plutôt qu'un
-  // OR EXISTS : PostgreSQL en fait une semi-jointure indexée.
-  const requested =
+  // URLs des soumissions qualifiées qui visent ce pool : payées par une
+  // communauté propriétaire du pool, ou faites par un admin. Un client qui paie
+  // sur son portefeuille personnel n'y injecte rien. IN (sous-requête) plutôt
+  // qu'un OR EXISTS : PostgreSQL en fait une semi-jointure indexée.
+  const requestedSql = () =>
     `ui.id IN (SELECT us.url_item_id FROM url_source us\n` +
     `                 JOIN search_request sr ON sr.id = us.search_request_id\n` +
     `                 JOIN wallet w ON w.id = sr.wallet_id\n` +
-    `                 JOIN community_pool cp ON cp.community_id = w.community_id AND cp.pool_id = sr.pool_id\n` +
-    `                WHERE sr.pool_id = ${add(poolId)})`;
+    `                 JOIN api_client ac ON ac.id = sr.api_client_id\n` +
+    `                 LEFT JOIN community_pool cp ON cp.community_id = w.community_id AND cp.pool_id = sr.pool_id\n` +
+    `                WHERE sr.pool_id = ${add(poolId)} AND (cp.pool_id IS NOT NULL OR ac.scope = 'admin'))`;
+  const simple = (conds) =>
+    `SELECT ui.id, ui.canonical_url, ui.domain, ${SCORE_EXPR[order]} AS pool_score\n` +
+    `  FROM url_item ui\n` +
+    (JOINS[order] ?? '') +
+    ` WHERE ${conds.join('\n   AND ')}\n` +
+    ` ORDER BY ${ORDERS[order]}, ui.id\n` +
+    ` LIMIT ${limitParam}`;
+
+  // "only" : le pool ne contient que les soumissions qui le visent (la
+  // sélection d'une communauté ou de l'admin), critères de sujet ignorés.
+  if (definition.include_requests === 'only' && poolId !== null) {
+    return { text: simple([...always, requestedSql()]), values };
+  }
+  // Sans critère de sujet, le pool prend déjà toutes les URLs classées.
+  if (!(definition.include_requests && poolId !== null && where.length)) {
+    return { text: simple([...always, ...where]), values };
+  }
+
+  // include_requests : la sélection normale (au plus `limit`), puis, après
+  // elle, les URLs des soumissions qualifiées qui n'y sont pas déjà (au plus
+  // `limit` de plus) : une soumission ne dispute pas sa place à la sélection.
+  const requested = requestedSql();
   const text =
     `WITH base AS (\n${select([...always, ...where], 'rn')}\n),\n` +
     `extra AS (\n${select([...always, requested, 'ui.id NOT IN (SELECT id FROM base)'], 'rn')}\n)\n` +

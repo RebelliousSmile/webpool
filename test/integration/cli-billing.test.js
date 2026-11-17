@@ -92,6 +92,26 @@ describe.skipIf(!available)('CLI : communautés, portefeuilles, recherches', () 
     expect((await cli('requests', 'nope')).code).toBe(1);
   });
 
+  it("list submit : liste d'admin depuis un fichier Markdown, refus pour un client read", async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'webpool-list-')), 'japon.md');
+    fs.writeFileSync(file, ['# Japon', '- [Photo AC](https://www.photo-ac.com/)', '- https://unsplash.com/s/photos/kyoto Kyoto', '- pas un lien', '- https://www.photo-ac.com/'].join('\n'));
+    const clients = await import('../../src/api/clients.js');
+    await clients.addClient({ name: 'operateur', scope: 'admin' });
+    const pools = await import('../../src/pools/index.js');
+    await pools.createPool({ slug: 'japon', definition: { include_requests: 'only' } });
+    const ok = await cli('list', 'submit', '--name', 'operateur', '--pool', 'japon', '--file', file, '--label', 'Japon : sources');
+    expect(ok.code).toBe(0);
+    expect(ok.out).toContain('ligne 4 ignorée');
+    expect(ok.out).toMatch(/Liste #\d+ : 2 liens \(1 doublons retirés\) pour le pool japon/);
+    const bad = await cli('list', 'submit', '--name', 'bob', '--pool', 'japon', '--file', file, '--label', 'x');
+    expect(bad).toMatchObject({ code: 1, out: expect.stringContaining("bob n'est pas admin") });
+    expect((await cli('list', 'submit', '--name', 'operateur')).out).toContain('--pool, --file et --label requis');
+    expect((await cli('list', 'nope')).code).toBe(1);
+  });
+
   it('normalize et classify à la main attendent leur tour pendant un cycle', async () => {
     const { withPipelineLock } = await import('../../src/lock.js');
     let res;

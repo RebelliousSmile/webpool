@@ -455,6 +455,24 @@ s'appliquant. Une liste compte de 1 à `WEBPOOL_LIST_MAX_LINKS` liens (200), en
 http(s), doublons retirés, titres facultatifs ; son libellé sert au classement
 comme une requête. Si l'ingestion échoue, elle est remboursée.
 
+L'admin soumet aussi ses propres listes, gratuitement et pour n'importe quel pool
+(datapool, `POST /requests` avec un jeton admin, ou en ligne de commande) ; elles
+comptent pour `include_requests` comme celles d'une communauté propriétaire :
+
+```bash
+pnpm webpool pool create --slug japon --label "Japon" --file pool.json   # {"include_requests": "only", "order": "rarity"}
+pnpm webpool list submit --name moi --pool japon --file japon.md --label "Japon : sources"
+pnpm webpool requests run                 # examen : ingestion, normalize, classify, media, refresh du pool
+```
+
+`list submit` lit le texte (`url titre`), le Markdown (`[titre](url)`, puces), le
+CSV ou TSV (colonne URL détectée, en-tête ignoré) et les favoris HTML exportés par
+un navigateur ; il signale les lignes ignorées. Après l'examen,
+`GET /requests/{id}/links` (et le détail dans datapool) donne le sort de chaque
+lien : en attente, en examen, erreur (introuvable, hôte refusé, erreur HTTP,
+réseau), entré ou non dans le pool, déjà connu du corpus. Le titre lu sur la page
+l'emporte sur le titre proposé.
+
 **Pools ouverts aux recherches.** Un pool est défini par des critères : une URL
 trouvée par une recherche n'y entre que si elle les remplit. Avec
 `"include_requests": true` dans sa définition, les URLs classées des recherches
@@ -462,7 +480,10 @@ qui visent ce pool **et sont payées par une communauté propriétaire du pool**
 entrent aussi, sans remplir les critères de sujet (`theme`, `subthemes`,
 `facets`, `domains_include`). Elles s'ajoutent après la sélection normale (au plus
 `limit` de plus) au lieu de lui disputer ses places : une recherche payée apporte
-toujours ses liens. Les seuils `min_relevance` et `min_quality` et
+toujours ses liens. Avec `"include_requests": "only"`, le pool ne contient que
+ces soumissions (critères de sujet ignorés) : le pool d'une sélection.
+Comptent les soumissions payées par une communauté propriétaire du pool et
+celles d'un admin. Les seuils `min_relevance` et `min_quality` et
 `domains_exclude` s'appliquent toujours.
 L'option est désactivée par défaut. Une recherche payée sur un portefeuille
 personnel n'entre jamais par cette voie, même sur un pool public : sinon
@@ -572,6 +593,7 @@ pnpm webpool client revoke --name client-a
 | `GET /requests?community=&status=` | read | recherches du client, ou de la communauté pour ses propriétaires |
 | `POST /requests` | read | achète une recherche (`{query, provider, pages, pool, community}`), ou soumet une liste de liens (`provider: "list"`, `links`), 201 |
 | `DELETE /requests/{id}` | read | annule une recherche en attente, remboursée |
+| `GET /requests/{id}/links` | read | sort de chaque lien d'une recherche ou d'une liste (auteur, propriétaires de la communauté qui a payé, admin) |
 | `GET /communities/{slug}/members`, `PUT`/`DELETE …/members/{name}` | read (propriétaires) | membres du plus gros apport au plus petit (rôle calculé, fondateur, plafond, dépense, apports, invitation acceptée) ; invitation, plafond, retrait d'un membre ; le rôle ne se donne pas |
 | `POST`/`DELETE /communities/{slug}/invitation`, `DELETE /communities/{slug}/membership` | read | accepter ou décliner une invitation (listées dans `/billing`), quitter une communauté |
 | `/admin/stats` | admin | volumes pour un tableau de bord |

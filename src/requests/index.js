@@ -120,7 +120,11 @@ export async function createRequest({
   } catch (err) {
     throw new BillingError('invalid', err.message);
   }
-  const price = checked.unitPrice * checked.pages;
+  // Un admin (la maison) ne se facture pas : sans communauté désignée, sa
+  // soumission est gratuite, pour tout pool, et compte pour include_requests.
+  const free = isAdmin && !community;
+  const unitPrice = free ? 0 : checked.unitPrice;
+  const price = unitPrice * checked.pages;
 
   return withTransaction(async (db) => {
     // Sérialise les achats d'un même client (file d'attente, idempotence) par
@@ -150,7 +154,7 @@ export async function createRequest({
     let payer = community;
     // Dans une communauté, on ne paie pas pour soi : une recherche sur un pool
     // d'une de ses communautés se paie sur le pot commun, jamais en personnel.
-    if (poolId !== null && !payer) {
+    if (poolId !== null && !payer && !free) {
       const { rows: payers } = await db.query(
         `SELECT c.slug FROM community_pool cp
            JOIN community c ON c.id = cp.community_id
@@ -165,7 +169,7 @@ export async function createRequest({
     }
     // Une liste n'entre que dans un pool de communauté, payée par son pot :
     // jamais d'injection sur un portefeuille personnel.
-    if (isList && !payer) {
+    if (isList && !payer && !free) {
       throw new BillingError('invalid', "Liste de liens : réservée aux pools d'une de vos communautés (pool requis)");
     }
     let wallet;
@@ -202,11 +206,12 @@ export async function createRequest({
     const { rows } = await db.query(
       `INSERT INTO search_request (api_client_id, wallet_id, pool_id, provider, query, pages, unit_price, price, idempotency_key, links)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-      [clientId, wallet.id, poolId, checked.provider, checked.query, checked.pages, checked.unitPrice, price, idempotencyKey,
+      [clientId, wallet.id, poolId, checked.provider, checked.query, checked.pages, unitPrice, price, idempotencyKey,
         isList ? JSON.stringify(checked.links) : null],
     );
     const id = Number(rows[0].id);
-    const balance = await postEntry(db, { walletId: wallet.id, delta: -price, kind: 'debit', requestId: id, clientId });
+    // Gratuit : aucune écriture au grand livre.
+    const balance = price === 0 ? wallet.balance : await postEntry(db, { walletId: wallet.id, delta: -price, kind: 'debit', requestId: id, clientId });
     if (balance === null) {
       throw new BillingError('insufficient_balance', `Solde insuffisant : ${price} giri nécessaires, ${wallet.balance} disponibles`);
     }
@@ -414,4 +419,66 @@ export async function runRequests({
     const post = await postProcess({ offline, batch });
     return { recovered, requests: done, processed: post.requests, steps: post.steps, pools: post.pools, ok: post.ok ?? true };
   });
+}
+
+// --- Compte rendu lien par lien d'une recherche ou d'une liste
+
+// Catégorie d'une erreur de normalisation, exposée aux clients (le message
+// brut reste réservé à l'admin).
+export function errorCategory({ error, http_status: httpStatus }) {
+  if (httpStatus === 404 || httpStatus === 410) return 'not_found';
+  if (/hôte refusé/i.test(error ?? '')) return 'host_refused';
+  if (httpStatus && httpStatus >= 400) return 'http_error';
+  return 'network';
+}
+
+// Sort de chaque lien : position (ordre de soumission, ou rang dans les
+// résultats), URL soumise, URL canonique, état. Visible de l'auteur, des
+// propriétaires de la communauté qui a payé, et de l'admin.
+export async function requestLinks({ id, clientId, isAdmin = false }) {
+  const { rows: req } = await query(
+    `SELECT sr.id, sr.links, sr.pool_id, sr.created_at, sr.status FROM search_request sr
+       JOIN wallet w ON w.id = sr.wallet_id
+      WHERE sr.id = $1
+        AND ($2 OR sr.api_client_id = $3
+             OR EXISTS (SELECT 1 FROM community_standing st
+                         WHERE st.community_id = w.community_id AND st.api_client_id = $3 AND st.is_owner))`,
+    [id, isAdmin, clientId],
+  );
+  if (req.length === 0) throw new BillingError('not_found', `Recherche inconnue : ${id}`);
+  const r = req[0];
+  const { rows } = await query(
+    `SELECT us.serp_rank AS position, ui.raw_url, ui.canonical_url, ui.domain, ui.title, ui.status, ui.error, ui.http_status,
+            ui.first_seen_at < $2 AS known,
+            EXISTS (SELECT 1 FROM pool_item pi WHERE pi.pool_id = $3 AND pi.url_item_id = ui.id) AS in_pool
+       FROM url_source us JOIN url_item ui ON ui.id = us.url_item_id
+      WHERE us.search_request_id = $1
+      ORDER BY us.serp_rank NULLS LAST, us.id`,
+    [id, r.created_at, r.pool_id],
+  );
+  const submitted = Array.isArray(r.links) ? r.links : null;
+  const items = rows.map((row) => {
+    const outcome =
+      row.status === 'error' ? 'error'
+        : row.status === 'classified' ? (r.pool_id === null ? 'in_corpus' : row.in_pool ? 'in_pool' : 'not_in_pool')
+          : 'examining';
+    return {
+      position: row.position,
+      url: submitted?.[row.position - 1]?.url ?? row.raw_url,
+      canonical_url: row.canonical_url,
+      domain: row.domain,
+      title: row.title,
+      outcome,
+      known: row.known,
+      error_category: outcome === 'error' ? errorCategory(row) : null,
+      ...(isAdmin ? { error: row.error, http_status: row.http_status } : {}),
+    };
+  });
+  // Liste pas encore ingérée : ses liens, en attente.
+  if (items.length === 0 && submitted) {
+    return submitted.map((l, i) => ({
+      position: i + 1, url: l.url, canonical_url: null, domain: null, title: l.title, outcome: 'queued', known: false, error_category: null,
+    }));
+  }
+  return items;
 }
