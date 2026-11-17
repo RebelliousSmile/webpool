@@ -511,6 +511,10 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
         [3, 'https://mort.example/404', 'error', false, 'not_found'],
       ]);
       expect(after.body.items[2]).not.toHaveProperty('error');
+      // un lien classé puis mis en quarantaine par le contrôle des liens
+      await db.query(`UPDATE url_item SET quarantined_at = now() WHERE raw_url = 'https://unsplash.com/photos/a'`);
+      expect((await call('GET', `/requests/${r.request.id}/links`, who.bob)).body.items[0]).toMatchObject({ outcome: 'error', error_category: 'quarantined' });
+      await db.query(`UPDATE url_item SET quarantined_at = NULL WHERE raw_url = 'https://unsplash.com/photos/a'`);
       // propriétaire de la communauté qui a payé : oui ; un autre client : non ; l'admin voit l'erreur brute
       expect((await call('GET', `/requests/${r.request.id}/links`, who.alice)).status).toBe(200);
       expect((await call('GET', `/requests/${r.request.id}/links`, who.carol)).status).toBe(404);

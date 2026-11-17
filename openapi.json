@@ -3979,8 +3979,10 @@
               "host_refused",
               "http_error",
               "network",
+              "quarantined",
               null
-            ]
+            ],
+            "description": "catégorie d'une erreur ; quarantined : lien mis en quarantaine par le contrôle des liens"
           },
           "error": {
             "type": [

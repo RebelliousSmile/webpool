@@ -449,7 +449,7 @@ export async function requestLinks({ id, clientId, isAdmin = false }) {
   const r = req[0];
   const { rows } = await query(
     `SELECT us.serp_rank AS position, ui.raw_url, ui.canonical_url, ui.domain, ui.title, ui.status, ui.error, ui.http_status,
-            ui.first_seen_at < $2 AS known,
+            ui.first_seen_at < $2 AS known, ui.quarantined_at IS NOT NULL AS quarantined,
             EXISTS (SELECT 1 FROM pool_item pi WHERE pi.pool_id = $3 AND pi.url_item_id = ui.id) AS in_pool
        FROM url_source us JOIN url_item ui ON ui.id = us.url_item_id
       WHERE us.search_request_id = $1
@@ -458,8 +458,9 @@ export async function requestLinks({ id, clientId, isAdmin = false }) {
   );
   const submitted = Array.isArray(r.links) ? r.links : null;
   const items = rows.map((row) => {
+    // Lien mis en quarantaine par le contrôle des liens (lien mort) : erreur.
     const outcome =
-      row.status === 'error' ? 'error'
+      row.status === 'error' || row.quarantined ? 'error'
         : row.status === 'classified' ? (r.pool_id === null ? 'in_corpus' : row.in_pool ? 'in_pool' : 'not_in_pool')
           : 'examining';
     return {
@@ -470,7 +471,7 @@ export async function requestLinks({ id, clientId, isAdmin = false }) {
       title: row.title,
       outcome,
       known: row.known,
-      error_category: outcome === 'error' ? errorCategory(row) : null,
+      error_category: outcome === 'error' ? (row.quarantined && row.status !== 'error' ? 'quarantined' : errorCategory(row)) : null,
       ...(isAdmin ? { error: row.error, http_status: row.http_status } : {}),
     };
   });
