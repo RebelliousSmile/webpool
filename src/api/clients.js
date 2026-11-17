@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { query } from '../db.js';
+import { SESSION_PREFIX, sessionClient } from './accounts.js';
 
 // Clients de l'API : le jeton n'est montré qu'à la création ; la base n'en garde
 // que l'empreinte, comparée à chaque requête.
@@ -38,7 +39,7 @@ export async function addClient({ name, scope = 'read' }) {
 
 export async function listClients() {
   const { rows } = await query(
-    `SELECT c.name, c.scope, c.created_at, c.revoked_at,
+    `SELECT c.name, c.scope, c.email, c.created_at, c.revoked_at,
             coalesce(array_agg(p.slug ORDER BY p.slug) FILTER (WHERE p.slug IS NOT NULL), '{}') AS pools
        FROM api_client c
        LEFT JOIN api_client_pool cp ON cp.api_client_id = c.id
@@ -76,12 +77,16 @@ export async function setPoolAccess({ name, slug, granted }) {
   return { name, slug, granted };
 }
 
-// Client actif correspondant au jeton, ou null.
+// Client actif correspondant au jeton (jeton brut d'un client, ou jeton de
+// session d'un compte), ou null.
 export async function authenticate(token) {
   if (!token) return null;
+  if (token.startsWith(SESSION_PREFIX)) return sessionClient(token);
   const { rows } = await query(
-    'SELECT id, name, scope FROM api_client WHERE token_hash = $1 AND revoked_at IS NULL',
+    'SELECT id, name, scope, email FROM api_client WHERE token_hash = $1 AND revoked_at IS NULL',
     [hashToken(token)],
   );
-  return rows.length ? { id: Number(rows[0].id), name: rows[0].name, scope: rows[0].scope } : null;
+  if (!rows.length) return null;
+  const r = rows[0];
+  return { id: Number(r.id), name: r.name, scope: r.scope, email: r.email ?? null, sessionId: null };
 }

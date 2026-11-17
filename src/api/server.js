@@ -125,10 +125,10 @@ export function createApiServer({
       return true;
     };
 
+    let match;
     try {
       if (/%00/i.test(req.url) || req.url.includes('\u0000')) throw nulError();
       const url = new URL(req.url, 'http://localhost');
-      let match;
       try {
         match = matchRoute(routes, req.method, url.pathname);
       } catch {
@@ -181,6 +181,10 @@ export function createApiServer({
         }
       }
 
+      // Route d'identifiants (connexion par compte) : bloquée au-delà de la
+      // limite des échecs d'authentification de l'IP, chaque échec y compte.
+      if (route.credentials && limited(rateLimiter.peek(`auth:${ip}`))) return undefined;
+
       const body = BODY_METHODS.has(req.method) ? await readJson(req) : undefined;
       const result = await route.handler({ client, params, query: url.searchParams, body, headers: req.headers });
       if (result.raw !== undefined) {
@@ -193,7 +197,10 @@ export function createApiServer({
       }
       return send(res, result.status ?? 200, result.body, { ...cors, ...result.headers });
     } catch (err) {
-      if (err instanceof ApiError) return sendError(res, err, cors);
+      if (err instanceof ApiError) {
+        if (err.status === 401 && match?.route?.credentials) rateLimiter.take(`auth:${ip}`);
+        return sendError(res, err, cors);
+      }
       // Dernier rempart : un texte que PostgreSQL refuse vient de la requête.
       if (PG_BAD_TEXT.has(err?.code)) return sendError(res, new ApiError(400, 'bad_request', 'Caractère invalide dans la requête'), cors);
       log(`Erreur interne : ${err.stack ?? err.message}`);

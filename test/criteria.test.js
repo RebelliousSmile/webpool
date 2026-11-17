@@ -7,6 +7,11 @@ describe('buildPoolQuery', () => {
     expect(text).toContain("ui.status = 'classified'");
   });
 
+  it('écarte toujours les URLs en quarantaine', () => {
+    expect(buildPoolQuery({}).text).toContain('ui.quarantined_at IS NULL');
+    expect(buildPoolQuery({ include_requests: true }, { poolId: 1 }).text).toContain('ui.quarantined_at IS NULL');
+  });
+
   it('traduit thème principal, sous-thèmes et facettes en EXISTS paramétrés', () => {
     const { text, values } = buildPoolQuery({
       theme: 'ia-generative',

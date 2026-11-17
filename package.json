@@ -1,6 +1,6 @@
 {
   "name": "webpool",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "description": "Corpus d'URLs normalisées, classées par taxonomie, restituées en pools matérialisés (PostgreSQL).",
   "type": "module",

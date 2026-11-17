@@ -5,6 +5,7 @@ import { query } from '../db.js';
 import { MEDIA_FILE_RE, mediaUrl } from '../media/files.js';
 import { mediaOf, sourceOf } from '../media/kinds.js';
 import { poolGrantedSql } from '../access.js';
+import * as accounts from './accounts.js';
 import { stats } from '../stats.js';
 import { USAGE_VALUES } from '../domains/index.js';
 import { QUERY_STATUSES, listQueries } from '../explore/index.js';
@@ -83,7 +84,55 @@ export async function health() {
 }
 
 export async function me({ client }) {
-  return { body: { name: client.name, scope: client.scope } };
+  return { body: { name: client.name, scope: client.scope, email: client.email ?? null } };
+}
+
+// --- Comptes : connexion par e-mail et mot de passe (voir accounts.js).
+
+const invalidCredentials = () => new ApiError(401, 'invalid_credentials', 'E-mail ou mot de passe incorrect');
+
+function textField(body, name) {
+  const value = body?.[name];
+  if (typeof value !== 'string' || value === '') throw badRequest(`${name} attendu (texte non vide)`);
+  return value;
+}
+
+function newPassword(body, name = 'password') {
+  const value = textField(body, name);
+  const problem = accounts.passwordProblem(value);
+  if (problem) throw badRequest(problem);
+  return value;
+}
+
+export async function activateAccountHandler({ body }) {
+  const email = textField(body, 'email');
+  const code = textField(body, 'code');
+  const session = await accounts.activateAccount({ email, code, password: newPassword(body) });
+  if (!session) throw new ApiError(401, 'invalid_invitation', 'Invitation invalide, expirée ou déjà utilisée');
+  return { status: 201, body: session };
+}
+
+export async function loginHandler({ body }) {
+  const email = textField(body, 'email');
+  const password = textField(body, 'password');
+  if (password.length > accounts.PASSWORD_MAX) throw invalidCredentials();
+  const session = await accounts.login({ email, password });
+  if (!session) throw invalidCredentials();
+  return { status: 201, body: session };
+}
+
+export async function logoutHandler({ client }) {
+  await accounts.logout({ sessionId: client.sessionId });
+  return { body: { ok: true } };
+}
+
+export async function changePasswordHandler({ client, body }) {
+  const current = textField(body, 'current');
+  const password = newPassword(body);
+  const changed = await accounts.changePassword({ clientId: client.id, sessionId: client.sessionId, current, password });
+  if (changed === null) throw new ApiError(409, 'no_account', 'Ce client n’a pas de compte (pas de mot de passe)');
+  if (!changed) throw new ApiError(403, 'invalid_credentials', 'Mot de passe actuel incorrect');
+  return { body: { ok: true } };
 }
 
 // --- Pools : visibles par l'admin ; pour un client `read`, les pools publics,
@@ -104,18 +153,41 @@ async function visiblePool(client, slug) {
   return rows[0];
 }
 
+// Aperçu d'une carte de pool : jusqu'à PREVIEW_THUMBS vignettes en cache, prises
+// parmi les PREVIEW_SCAN premiers rangs, et la répartition par usage commercial.
+const PREVIEW_THUMBS = 4;
+const PREVIEW_SCAN = 50;
+
 export async function listPools({ client }) {
   const { rows } = await query(
     // Filtrer d'abord, compter ensuite : seuls les pools visibles sont comptés,
     // par l'index (pool_id, rank).
     `SELECT p.slug, p.label, p.public, p.refreshed_at,
-            (SELECT count(*)::int FROM pool_item pi WHERE pi.pool_id = p.id) AS items
+            (SELECT count(*)::int FROM pool_item pi WHERE pi.pool_id = p.id) AS items,
+            ARRAY(SELECT t.file FROM (
+                    SELECT pi.rank,
+                           (SELECT m.file FROM url_media m
+                             WHERE m.url_item_id = pi.url_item_id AND m.status = 'cached'
+                             ORDER BY m.kind = 'og' DESC LIMIT 1) AS file
+                      FROM pool_item pi WHERE pi.pool_id = p.id ORDER BY pi.rank LIMIT $3) t
+                   WHERE t.file IS NOT NULL ORDER BY t.rank LIMIT $4) AS preview,
+            (SELECT coalesce(json_agg(u ORDER BY u.urls DESC), '[]') FROM (
+                    SELECT dp.usage_commercial AS usage, count(*)::int AS urls
+                      FROM pool_item pi
+                      JOIN url_item ui ON ui.id = pi.url_item_id
+                      LEFT JOIN domain_profile dp ON dp.domain = ui.domain
+                     WHERE pi.pool_id = p.id
+                     GROUP BY dp.usage_commercial) u) AS usage_commercial
        FROM pool p
       WHERE $1 OR ${GRANTED_SQL('$2')}
       ORDER BY p.slug`,
-    [isAdmin(client), client.id],
+    [isAdmin(client), client.id, PREVIEW_SCAN, PREVIEW_THUMBS],
   );
-  return { body: { items: rows.map((r) => ({ ...r, refreshed_at: iso(r.refreshed_at) })) } };
+  return {
+    body: {
+      items: rows.map((r) => ({ ...r, refreshed_at: iso(r.refreshed_at), preview: r.preview.map(mediaUrl) })),
+    },
+  };
 }
 
 export async function getPool({ client, params }) {
@@ -180,6 +252,44 @@ export async function listPoolItems({ client, params, query: qs }) {
   return { body: paged(items, total, page) };
 }
 
+// Recherche dans tous les pools visibles : un résultat par URL, avec les pools
+// (visibles) qui la contiennent et son rang dans chacun.
+export const SEARCH_MIN = 2;
+export const SEARCH_MAX = 200;
+
+export async function search({ client, query: qs }) {
+  const text = (qs.get('q') ?? '').trim();
+  if (text.length < SEARCH_MIN || text.length > SEARCH_MAX) {
+    throw badRequest(`q doit compter entre ${SEARCH_MIN} et ${SEARCH_MAX} caractères`);
+  }
+  const page = pageParams(qs);
+  const visible = `pool_item spi JOIN pool p ON p.id = spi.pool_id
+                    WHERE spi.url_item_id = ui.id AND ($1 OR ${GRANTED_SQL('$2')})`;
+  const { rows, total } = await selectPage({
+    select: `ui.id, ui.canonical_url, ui.domain, ui.title, dp.usage_commercial,
+             ui.description, ui.media_type, ${THUMB_SQL}, ${FAVICON_SQL},
+             (SELECT json_agg(json_build_object('slug', p.slug, 'label', p.label, 'rank', spi.rank) ORDER BY p.slug)
+                FROM ${visible}) AS pools`,
+    from: `url_item ui LEFT JOIN domain_profile dp ON dp.domain = ui.domain`,
+    where: [
+      `EXISTS (SELECT 1 FROM ${visible})`,
+      `(ui.title ILIKE $3 OR ui.canonical_url ILIKE $3 OR ui.description ILIKE $3)`,
+    ],
+    values: [isAdmin(client), client.id, likePattern(text)],
+    order: 'ui.quality_score DESC NULLS LAST, ui.id',
+    page,
+  });
+  const items = rows.map((r) => ({
+    url: r.canonical_url,
+    domain: r.domain,
+    title: r.title,
+    usage_commercial: r.usage_commercial,
+    ...mediaFields(r, r.canonical_url),
+    pools: r.pools,
+  }));
+  return { body: { q: text, ...paged(items, total, page) } };
+}
+
 const EXPORT_TYPES = { json: 'application/json', csv: 'text/csv', md: 'text/markdown', txt: 'text/plain' };
 
 // Export admin : définition et scores compris.
@@ -213,7 +323,7 @@ async function exportResponse(slug, format, { client }) {
 // --- Administration : corpus, taxonomie, domaines, frontière, runs.
 
 export async function adminStats() {
-  const [base, { rows: pools }, { rows: domains }, { rows: queries }, { rows: media }] = await Promise.all([
+  const [base, { rows: pools }, { rows: domains }, { rows: queries }, { rows: media }, { rows: quarantined }] = await Promise.all([
     stats(),
     query('SELECT count(*)::int AS n FROM pool'),
     query(
@@ -228,10 +338,20 @@ export async function adminStats() {
        UNION ALL
        SELECT 'favicons', favicon_status, count(*)::int FROM domain_profile WHERE favicon_status IS NOT NULL GROUP BY favicon_status`,
     ),
+    query('SELECT count(*)::int AS n FROM url_item WHERE quarantined_at IS NOT NULL'),
   ]);
   const mediaStats = { thumbs: { pending: 0, cached: 0, failed: 0 }, favicons: { pending: 0, cached: 0, failed: 0 } };
   for (const m of media) mediaStats[m.what][m.status] = m.n;
-  return { body: { ...base, pools: pools[0].n, domain_profile: domains[0], search_query: queries, media: mediaStats } };
+  return {
+    body: {
+      ...base,
+      pools: pools[0].n,
+      quarantined: quarantined[0].n,
+      domain_profile: domains[0],
+      search_query: queries,
+      media: mediaStats,
+    },
+  };
 }
 
 export async function listUrls({ query: qs }) {
@@ -242,11 +362,13 @@ export async function listUrls({ query: qs }) {
   const domain = qs.get('domain');
   const text = qs.get('q');
   const facets = facetParams(qs);
+  const quarantined = boolParam(qs, 'quarantined');
 
   const where = [];
   const values = [];
   const $ = (v) => `$${values.push(v)}`;
   if (status) where.push(`ui.status = ${$(status)}`);
+  if (quarantined !== undefined) where.push(`ui.quarantined_at IS ${quarantined ? 'NOT ' : ''}NULL`);
   if (domain) where.push(`ui.domain = ${$(domain.toLowerCase())}`);
   if (theme) {
     where.push(
@@ -268,6 +390,7 @@ export async function listUrls({ query: qs }) {
   const { rows, total } = await selectPage({
     select: `ui.id, coalesce(ui.canonical_url, ui.raw_url) AS url, ui.domain, ui.title, ui.status,
              ui.relevance_score, ui.quality_score, ui.confidence_score, ui.first_seen_at,
+             ui.checked_at, ui.quarantined_at,
              (SELECT d.usage_commercial FROM domain_profile d WHERE d.domain = ui.domain) AS usage_commercial,
              (SELECT t.slug FROM url_theme ut JOIN theme t ON t.id = ut.theme_id
                WHERE ut.url_item_id = ui.id AND ut.is_primary) AS primary_theme,
@@ -285,6 +408,8 @@ export async function listUrls({ query: qs }) {
     quality_score: num(r.quality_score),
     confidence_score: num(r.confidence_score),
     first_seen_at: iso(r.first_seen_at),
+    checked_at: iso(r.checked_at),
+    quarantined_at: iso(r.quarantined_at),
     ...mediaFields({ ...r, thumb_file, favicon_file }, r.url),
   }));
   return { body: paged(items, total, page) };
@@ -296,6 +421,7 @@ export async function getUrl({ params }) {
     `SELECT ui.id, ui.raw_url, ui.canonical_url, ui.domain, ui.title, ui.http_status, ui.status,
             ui.duplicate_of, ui.error, ui.relevance_score, ui.confidence_score, ui.quality_score,
             ui.first_seen_at, ui.normalized_at, ui.classified_at, dp.usage_commercial,
+            ui.checked_at, ui.quarantined_at, ui.dead_streak,
             ui.description, ui.media_type, ui.lang, ui.site_name, ${THUMB_SQL}, ${FAVICON_SQL}
        FROM url_item ui LEFT JOIN domain_profile dp ON dp.domain = ui.domain
       WHERE ui.id = $1`,
@@ -303,7 +429,7 @@ export async function getUrl({ params }) {
   );
   if (rows.length === 0) throw notFound(`URL inconnue : ${id}`);
   const { thumb_file, favicon_file, ...r } = rows[0];
-  const [{ rows: sources }, { rows: themes }, { rows: facets }, { rows: pools }] = await Promise.all([
+  const [{ rows: sources }, { rows: themes }, { rows: facets }, { rows: pools }, { rows: checks }] = await Promise.all([
     query(
       `SELECT provider, query, serp_rank, discovered_at FROM url_source
         WHERE url_item_id = $1 ORDER BY discovered_at, id`,
@@ -326,6 +452,11 @@ export async function getUrl({ params }) {
         WHERE pi.url_item_id = $1 ORDER BY p.slug`,
       [id],
     ),
+    query(
+      `SELECT checked_at, http_status, verdict, error FROM url_check
+        WHERE url_item_id = $1 ORDER BY checked_at DESC, id DESC LIMIT 10`,
+      [id],
+    ),
   ]);
   return {
     body: {
@@ -338,11 +469,14 @@ export async function getUrl({ params }) {
       first_seen_at: iso(r.first_seen_at),
       normalized_at: iso(r.normalized_at),
       classified_at: iso(r.classified_at),
+      checked_at: iso(r.checked_at),
+      quarantined_at: iso(r.quarantined_at),
       ...mediaFields({ ...r, thumb_file, favicon_file }, r.canonical_url ?? r.raw_url),
       sources: sources.map((s) => ({ ...s, discovered_at: iso(s.discovered_at) })),
       themes: themes.map((t) => ({ ...t, score: num(t.score) })),
       facets,
       pools,
+      checks: checks.map((c) => ({ ...c, checked_at: iso(c.checked_at) })),
     },
   };
 }

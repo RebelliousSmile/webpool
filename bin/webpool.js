@@ -11,8 +11,10 @@ import { formatPool } from '../src/pools/export.js';
 import { stats } from '../src/stats.js';
 import { assertUsage, listDomains, qualifyDomain, setExploreExcluded } from '../src/domains/index.js';
 import { addQuery, explore, importQueries, listPipes, listQueries, parseTags } from '../src/explore/index.js';
-import { cycle } from '../src/cycle/index.js';
+import { checkLine, cycle } from '../src/cycle/index.js';
 import { cacheMedia } from '../src/media/index.js';
+import { checkLinks } from '../src/check/index.js';
+import { inviteAccount } from '../src/api/accounts.js';
 import { addClient, listClients, revokeClient, setPoolAccess } from '../src/api/clients.js';
 import { config } from '../src/config.js';
 import { withPipelineLock } from '../src/lock.js';
@@ -47,13 +49,16 @@ Usage :
   webpool pipe list                        (tuyaux flot:<slug> : requêtes actives, pression et référence de la dernière visite)
   webpool explore --budget N [--provider p] [--limit N]   (au plus N appels aux providers, ceux du tuyau courant d'abord)
   webpool media [--limit N] [--retry-failed]   (vignettes et favicons en attente : téléchargés, réduits en WebP, mis en cache)
-  webpool cycle --budget N [--provider p] [--offline]   (explore, normalize, classify et media jusqu'à vider la file, refresh des pools)
+  webpool check [--limit N]   (statut HTTP des liens les moins récemment testés ; 3 échecs francs de suite : quarantaine)
+  webpool cycle --budget N [--provider p] [--offline]   (explore, normalize, classify et media jusqu'à vider la file, check, refresh des pools)
   webpool serve [--port N] [--host h]   (API HTTP, voir openapi.json)
   webpool client add --name <nom> [--scope admin|read]   (affiche le jeton une seule fois)
   webpool client list
   webpool client revoke --name <nom>
   webpool client grant --name <nom> --slug <pool>   (client read : accès au pool)
   webpool client ungrant --name <nom> --slug <pool>
+  webpool account invite --name <client> --email <adresse> [--days 7]
+                                   (compte read : code d'activation affiché une seule fois ; réinvite = réinitialise)
   webpool community add --slug <slug> [--label "…"]
   webpool community list
   webpool community join --slug <communauté> --name <client> [--role owner|member] [--monthly N|none]
@@ -112,6 +117,7 @@ const OPTIONS = {
   id: { type: 'string' },
   days: { type: 'string' },
   by: { type: 'string' },
+  email: { type: 'string' },
   help: { type: 'boolean', short: 'h', default: false },
 };
 
@@ -301,6 +307,11 @@ async function main() {
       );
       break;
     }
+    case 'check': {
+      const res = await checkLinks(limit ? { limit } : {});
+      console.log(`Check run #${res.runId} : ${checkLine(res)}.`);
+      break;
+    }
     case 'cycle': {
       const budget = parsePositive('budget', values.budget);
       if (budget === undefined) throw new Error('cycle : --budget requis');
@@ -316,6 +327,18 @@ async function main() {
       await serve({ port, host: values.host ?? config.apiHost, corsOrigins: config.apiCorsOrigins });
       break;
     }
+    case 'account': {
+      if (subcommand !== 'invite') throw new Error(`Sous-commande account inconnue : ${subcommand ?? '(aucune)'}`);
+      if (!values.name || !values.email) throw new Error('account invite : --name et --email requis');
+      const res = await inviteAccount({ name: values.name, email: values.email, days: parsePositive('days', values.days) });
+      console.log(
+        `${res.created ? 'Client read créé' : 'Client existant'} "${res.name}" invité (${res.email}), jusqu'au ${res.expires_at.slice(0, 16).replace('T', ' ')} UTC.
+`
+          + `Code d'activation, affiché une seule fois :
+${res.code}`,
+      );
+      break;
+    }
     case 'client': {
       if (subcommand === 'add') {
         if (!values.name) throw new Error('client add : --name requis');
@@ -326,7 +349,7 @@ async function main() {
         for (const c of rows) {
           const state = c.revoked_at ? `révoqué le ${c.revoked_at.toISOString().slice(0, 10)}` : 'actif';
           console.log(
-            `${c.name.padEnd(20)} ${c.scope.padEnd(5)}  ${state}${c.scope === 'read' ? `  pools : ${c.pools.join(', ') || '(aucun)'}` : ''}`,
+            `${c.name.padEnd(20)} ${c.scope.padEnd(5)}  ${state}${c.email ? `  ${c.email}` : ''}${c.scope === 'read' ? `  pools : ${c.pools.join(', ') || '(aucun)'}` : ''}`,
           );
         }
         if (rows.length === 0) console.log('(aucun client)');

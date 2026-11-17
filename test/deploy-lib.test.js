@@ -236,7 +236,9 @@ describe('mot de passe de la base hors de la ligne de commande', () => {
     }
   };
 
-  it("transmet le mot de passe par PGPASSWORD et une URL sans lui en argument", () => {
+  // La cible est Linux. Sous Windows, le sh de Git Bash réduit `\\` à `\` en
+  // passant le script à node.exe : l'échappement d'une apostrophe s'y perd.
+  it.skipIf(process.platform === 'win32')("transmet le mot de passe par PGPASSWORD et une URL sans lui en argument", () => {
     const secret = "S3cr'et $HOME `id`";
     const { command, out } = runRemote(`DATABASE_URL=postgres://u:${encodeURIComponent(secret)}@h.example:5432/base\n`);
     expect(out).toEqual({ argv: ['postgres://u@h.example:5432/base'], pw: secret });

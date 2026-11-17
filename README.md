@@ -305,8 +305,9 @@ facette des URLs déjà classées, sans reclasser. À la classification, elle
 l'emporte sur les motifs de la taxonomie. Faute de qualification, la facette
 vaut `a-qualifier`, sauf si un motif de la taxonomie s'applique.
 
-**Cycle.** `cycle` enchaîne `explore`, puis `normalize` et `classify` par lots
-de 100 jusqu'à vider la file, puis `pool refresh` de chaque pool. Il affiche
+**Cycle.** `cycle` enchaîne `explore`, puis `normalize`, `classify` et `media` par lots
+de 100 jusqu'à vider la file, puis `check` (contrôle des liens, sauté hors ligne),
+puis `pool refresh` de chaque pool. Il affiche
 une ligne par étape : appels et requêtes en échec, URLs et domaines nouveaux,
 domaines à qualifier, taille de chaque pool. Une étape en échec n'empêche pas
 les suivantes. Le code de sortie vaut 1 si une étape échoue entièrement :
@@ -370,8 +371,9 @@ entière du grand livre (1 € = `WEBPOOL_GIRI_PER_EUR` giri, 1 000 par défaut)
   nouveau membre sans plafond explicite reçoit `WEBPOOL_MEMBER_DEFAULT_LIMIT` giri
   sur 30 jours (1 000 par défaut).
 - Un **pool public** (`pool publish`) est visible et exportable par tout client,
-  sans accord : c'est l'accès gratuit par défaut. Un accès reste un jeton créé par
-  l'admin (`client add`) ; il n'y a pas d'inscription en libre-service.
+  sans accord : c'est l'accès gratuit par défaut. Un accès reste créé par l'admin
+  (`client add`, ou `account invite` pour un compte à mot de passe) ; il n'y a pas
+  d'inscription en libre-service.
 
 ```bash
 # Communauté, membres (plafond en giri sur 30 jours glissants), pools rattachés
@@ -553,6 +555,45 @@ communautés, plateformes vidéo, presse et guides, autres) se calcule à la lec
 depuis le domaine (`src/media/kinds.js`) : enrichir la liste ne demande aucune
 reprise du corpus.
 
+## Contrôle des liens
+
+```bash
+pnpm webpool check [--limit N]   # statut HTTP des liens les moins récemment testés
+```
+
+`webpool check` (aussi étape de `cycle`, avant le refresh des pools, sautée hors
+ligne) teste le statut HTTP **final** des liens normalisés ou classés (redirections
+suivies, corps jamais lu, pas de rejeu) et historise chaque test dans `url_check`.
+Trois verdicts :
+
+- `ok` : 2xx ;
+- `dead` (échec franc) : 404, 410, domaine inexistant (`ENOTFOUND`), connexion
+  refusée (`ECONNREFUSED`), certificat expiré (`CERT_HAS_EXPIRED`) ou émis pour un
+  autre nom (`ERR_TLS_CERT_ALTNAME_INVALID`), hôte devenu privé ;
+- `unsure` : tout le reste — 403, 429, 5xx, délai dépassé, `EAI_AGAIN`, trop de
+  redirections (souvent un mur de consentement qui pose un cookie), chaîne de
+  certificats incomplète (Node ne la complète pas, les navigateurs si), erreur
+  inconnue. Historisé, jamais compté : une IP de datacenter reçoit souvent 403 et
+  429 de sites sains.
+
+Trois `dead` consécutifs (un `unsure` entre deux ne compte pas et ne remet pas à
+zéro) mettent le lien en **quarantaine** (`url_item.quarantined_at`) : il garde son
+statut, ses thèmes et ses facettes, mais la sélection des pools l'écarte. Le
+premier `ok` remet le compteur à zéro et lève la quarantaine ; le lien revient à
+son pool au refresh suivant. Un lien n'est jamais retesté moins de
+`WEBPOOL_CHECK_INTERVAL_HOURS` après son dernier test : avec le cycle quotidien,
+un lien mort est écarté en 3 jours. Au-delà de `WEBPOOL_CHECK_LIMIT` liens à
+tester, chacun l'est tous les ⌈N / limite⌉ jours : relever alors la limite. Une
+passe tient le verrou du pipeline, au pire limite / `WEBPOOL_CONCURRENCY` ×
+`WEBPOOL_FETCH_TIMEOUT_MS` (≈ 13 min par défaut).
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `WEBPOOL_CHECK_LIMIT` | 300 | liens testés par passe, les moins récemment testés d'abord |
+| `WEBPOOL_CHECK_INTERVAL_HOURS` | 20 | heures avant de retester un lien (20 et non 24 : le cycle dérive de quelques minutes) |
+| `WEBPOOL_CHECK_THRESHOLD` | 3 | échecs francs consécutifs avant la quarantaine |
+| `WEBPOOL_CHECK_RETENTION_DAYS` | 90 | jours d'historique conservés dans `url_check` |
+
 ## API HTTP
 
 `webpool serve` expose le corpus et les pools en JSON, pour l'interface
@@ -580,12 +621,31 @@ pnpm webpool client list
 pnpm webpool client revoke --name client-a
 ```
 
+**Comptes.** Un client `read` peut aussi se connecter par e-mail et mot de passe,
+sur invitation de l'admin : il n'y a ni inscription libre ni envoi de mail, le code
+d'activation se transmet à la main. Le compte choisit son mot de passe (12
+caractères au moins, empreinte scrypt) avec ce code, valable 7 jours et à usage
+unique, puis obtient une session de 30 jours (jeton `wps_…`, empreinte SHA-256
+en base, table `api_session`). Une nouvelle invitation vaut réinitialisation :
+mot de passe effacé, sessions révoquées. Changer de mot de passe révoque les
+autres sessions. Le jeton brut du client (`wp_…`) reste accepté.
+
+```bash
+pnpm webpool account invite --name camille --email camille@atelier.example [--days 7]
+# Client read créé "camille" invité (camille@atelier.example), jusqu'au … UTC.
+# Code d'activation, affiché une seule fois :
+# wpi_…
+```
+
 | Route (`/api/v1`) | Accès | Contenu |
 |---|---|---|
 | `/health`, `/openapi.json` | public | état de la base, contrat |
 | `/media/{empreinte}.webp` | public | vignette ou favicon du cache (`Cache-Control: immutable`) |
-| `/me` | read | client authentifié |
-| `/pools`, `/pools/{slug}` | read | pools visibles ; volumes, domaines principaux, répartition de l'usage commercial |
+| `POST /account/activate`, `POST /account/login` | public | premier mot de passe avec le code d'invitation (`{email, code, password}`), ou connexion (`{email, password}`) : session `{token, expires_at}`, 201 ; 401 sans révéler la cause. Les échecs comptent par IP |
+| `POST /account/logout`, `PUT /account/password` | read | ferme la session courante ; change le mot de passe (`{current, password}`, 403 si `current` est faux, 409 sans compte) |
+| `/me` | read | client authentifié (nom, scope, e-mail du compte ou `null`) |
+| `/search?q=` | read | recherche dans tous les pools visibles (titre, URL, description ; 2 à 200 caractères), un résultat par URL avec ses pools et rangs, paginée |
+| `/pools`, `/pools/{slug}` | read | pools visibles ; volumes, domaines principaux, répartition de l'usage commercial ; `preview` : jusqu'à 4 vignettes des premiers rangs |
 | `/pools/{slug}/export?format=json\|csv\|md\|txt` | read | le pool entier dans l'ordre de rang, sans définition ni score (`txt` : une URL par ligne) |
 | `/pools/{slug}/items` | read | URLs rangées, paginées (`limit` ≤ 500, `offset`), avec description, type de média, famille de source, vignette et favicon |
 | `/billing` | read | prix des recherches, solde personnel, communautés (rôle, solde, plafond, dépense sur 30 jours) |
@@ -596,9 +656,9 @@ pnpm webpool client revoke --name client-a
 | `GET /requests/{id}/links` | read | sort de chaque lien d'une recherche ou d'une liste (auteur, propriétaires de la communauté qui a payé, admin) |
 | `GET /communities/{slug}/members`, `PUT`/`DELETE …/members/{name}` | read (propriétaires) | membres du plus gros apport au plus petit (rôle calculé, fondateur, plafond, dépense, apports, invitation acceptée) ; invitation, plafond, retrait d'un membre ; le rôle ne se donne pas |
 | `POST`/`DELETE /communities/{slug}/invitation`, `DELETE /communities/{slug}/membership` | read | accepter ou décliner une invitation (listées dans `/billing`), quitter une communauté |
-| `/admin/stats` | admin | volumes pour un tableau de bord |
+| `/admin/stats` | admin | volumes pour un tableau de bord, dont les liens en quarantaine (`quarantined`) |
 | `/admin/pools/{slug}/export?format=json\|csv\|md\|txt` | admin | export de `pool export`, définition et scores compris |
-| `/admin/urls`, `/admin/urls/{id}` | admin | corpus filtré (`status`, `theme`, `facet=slug:valeur`, `domain`, `q`, `order`) ; fiche : sources, thèmes, facettes, pools |
+| `/admin/urls`, `/admin/urls/{id}` | admin | corpus filtré (`status`, `theme`, `facet=slug:valeur`, `domain`, `q`, `quarantined`, `order`), avec `checked_at` et `quarantined_at` ; fiche : sources, thèmes, facettes, pools, contrôle (`checked_at`, `quarantined_at`, `dead_streak`, `checks` : 10 derniers tests) |
 | `/admin/themes`, `/admin/facets` | admin | taxonomie en arbre, valeurs de facettes, avec volumes |
 | `/admin/domains` | admin | registre (`to_qualify`, `excluded`, `usage`, `q`) |
 | `/admin/queries`, `/admin/runs` | admin | frontière d'exploration, historique du pipeline |
@@ -621,11 +681,12 @@ trace une ligne par requête (méthode, chemin, statut, durée, client).
 | `WEBPOOL_API_MAX_CONNECTIONS` | 256 | connexions simultanées au plus ; requête coupée après 30 s, en-têtes incomplets après 15 s, connexion inactive fermée après 5 s |
 | `WEBPOOL_API_TRUST_PROXY` | non | `1` : IP du client lue dans la dernière entrée de `X-Forwarded-For`. À activer seulement derrière un proxy de confiance (alwaysdata : vérifier que l'en-tête est posé) ; sinon toutes les requêtes sans jeton partagent un compteur |
 
-L'API lit le corpus et n'écrit que les recherches payantes et les membres des
-communautés. Pour aller plus loin,
+L'API lit le corpus et n'écrit que les recherches payantes, les membres des
+communautés, les mots de passe et les sessions des comptes. Pour aller plus loin,
 la base peut être ouverte au serveur par un rôle PostgreSQL limité à `SELECT`, plus
 `INSERT, UPDATE` sur `search_request`, `wallet` et `wallet_entry`, `INSERT, UPDATE, DELETE` sur
-`community_member` (gestion des membres) et `USAGE` sur leurs séquences. Les
+`community_member` (gestion des membres), `INSERT, UPDATE, DELETE` sur `api_session` et
+`UPDATE` sur trois colonnes d'`api_client` (comptes), et `USAGE` sur leurs séquences. Les
 achats et les changements de membres se sérialisent par verrous consultatifs, sans
 `SELECT … FOR UPDATE` sur `api_client` ni `community` : ces droits suffisent, ce
 que vérifie un test d'intégration avec un rôle créé ainsi :
@@ -635,6 +696,8 @@ GRANT USAGE ON SCHEMA public TO webpool_api;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO webpool_api;
 GRANT INSERT, UPDATE ON search_request, wallet, wallet_entry TO webpool_api;
 GRANT INSERT, UPDATE, DELETE ON community_member TO webpool_api;
+GRANT UPDATE (password_hash, invite_hash, invite_expires_at) ON api_client TO webpool_api;
+GRANT INSERT, UPDATE, DELETE ON api_session TO webpool_api;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO webpool_api;
 ``` Elle se déploie comme un site Node.js
 (voir *Déploiement*) ; `/api/v1/health` renvoie la version et le commit livré.
@@ -753,10 +816,14 @@ créée dans l'admin, pas par le script de déploiement :
 | Commande | `node bin/webpool.js cycle --budget 20` |
 | Répertoire de travail | `www/webpool` |
 | Environnement | `NODEJS_VERSION=24` |
-| Fréquence | `0 4 * * 1` (lundi, 4 h) |
+| Fréquence | `0 4 * * *` (chaque jour, 4 h) |
 
-Avec 20 appels par semaine, le coût reste autour de 0,11 $ (OpenRouter, moteur
-Perplexity).
+Un passage fait au plus 20 appels, soit environ 0,11 $ (OpenRouter, moteur
+Perplexity) ; le plafond quotidien (environ 3,30 $ par mois) n'est atteint que si
+de nouvelles requêtes arrivent chaque jour. L'épuisement borne la dépense : une
+requête `openrouter` s'épuise à son premier passage et se repose
+`WEBPOOL_EXPLORE_REST_DAYS` jours, et un passage sans requête active ne fait aucun
+appel.
 
 Les recherches payantes ont leur propre tâche, à la même configuration :
 commande `node bin/webpool.js requests run`, fréquence `*/15 * * * *`. Le verrou
@@ -776,7 +843,7 @@ sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
 
 | Chemin | Rôle |
 |---|---|
-| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) ; `002` à `011` : domain_profile, search_query, search_query_run, exclusion_hash, api_client, tuyaux, url_media, communautés, portefeuilles et recherches payantes, rétention du grand livre et pools publics, idempotence, reprise du post-traitement, invitations et index |
+| `db/migrations/` | Migrations versionnées, `001_init.sql` = schéma initial (url_item, url_source, theme, url_theme, facet_definition, url_facet_value, pool, pool_item, processing_run) ; `002` à `013` : domain_profile, search_query, search_query_run, exclusion_hash, api_client, tuyaux, url_media, communautés, portefeuilles et recherches payantes, rétention du grand livre et pools publics, idempotence, reprise du post-traitement, invitations et index, propriétaire de communauté, contrôle des liens (url_check, quarantaine) |
 | `src/ingest/` | Providers SERP (`file`, `brave`, `searxng`, `europeana`, `flickr`, `openrouter`) + insertion tracée |
 | `src/normalize/` | Canonisation stricte (tracking, redirections, dédup domaine+canonique), fetch poli |
 | `src/classify/` | Classifieur par règles piloté par `config/taxonomy.json` |
@@ -784,7 +851,8 @@ sauter la suivante : espacer les tâches lourdes (`normalize` en ligne respecte
 | `src/explore/` | Frontière de requêtes, exclusion des domaines saturés, `explore` (fonctions pures dans `frontier.js` et `exclusion.js`) |
 | `src/domains/` | Registre des domaines et facette `usage-commercial` |
 | `src/media/` | Type de média et famille de source (`kinds.js`), réduction d'images (`thumbnail.js`, sharp), cache `webpool media` |
-| `src/cycle/` | `cycle` : explore, puis les étapes du pipeline et le refresh de tous les pools |
+| `src/cycle/` | `cycle` : explore, puis les étapes du pipeline, le contrôle des liens et le refresh de tous les pools |
+| `src/check/` | Contrôle des liens `webpool check` ; verdict et compteur de quarantaine purs (`verdict.js`) |
 | `src/pipeline/` | Étapes partagées par `cycle` et `requests run` (normalize, classify, media par lots, refresh de pools), isolées les unes des autres |
 | `src/lock.js` | Verrou consultatif du pipeline (`cycle`, `requests run`, `normalize` et `classify` à la main) |
 | `src/access.js` | Règle unique de visibilité d'un pool (public, accordé, communauté acceptée) |

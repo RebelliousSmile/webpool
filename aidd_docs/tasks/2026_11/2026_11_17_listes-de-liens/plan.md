@@ -18,7 +18,7 @@ status: implemented
 
 | #   | Phase | Contenu |
 | --- | ----- | ------- |
-| 1   | Soumissions d'admin | Gratuites, pour tout pool, comptées par `include_requests` ; prix 0 accepté pour elles (migration `014`), sans écriture au grand livre ; `webpool list submit` (CLI). |
+| 1   | Soumissions d'admin | Gratuites, pour tout pool, comptées par `include_requests` ; prix 0 accepté pour elles (migration `016`), sans écriture au grand livre ; `webpool list submit` (CLI). |
 | 2   | Pool de listes | `include_requests: "only"` : le pool ne contient que les URLs des recherches et listes qui le visent (communauté propriétaire ou admin), seuils et exclusions appliqués. |
 | 3   | Compte rendu par lien | `GET /requests/{id}/links` : position, URL soumise, URL canonique, statut, catégorie d'erreur (brute pour l'admin), présence dans le pool. |
 | 4   | Formats d'entrée | Lecture du texte, du Markdown, du CSV et des favoris HTML (datapool, et CLI pour `list submit`) ; chargement d'un fichier dans datapool ; détail par lien dans l'historique. |
