@@ -16,6 +16,7 @@ import {
   ownerSetMember, walletEntries, walletsFor,
 } from '../billing/index.js';
 import { REQUEST_STATUSES, cancelRequest, createRequest, listRequests, requestLinks } from '../requests/index.js';
+import { parseLinkText } from '../requests/links.js';
 import {
   ApiError,
   badRequest,
@@ -638,7 +639,14 @@ export async function billing({ client }) {
       max_queued: config.requestMaxQueued,
       prices: currentPrices().map(({ provider, unit_price, max_pages }) => ({ provider, unit_price, max_pages })),
       // listes de liens soumises par les membres, pour les pools de leur communauté
-      lists: { price_per_link: config.listPricePerLink, max_links: config.listMaxLinks },
+      lists: {
+        price_per_link: config.listPricePerLink,
+        max_links: config.listMaxLinks,
+        // récompense d'un lien valide apporté (nouveau pour le corpus, entré dans le pool) et plafonds sur 30 jours
+        reward_per_link: config.linkReward,
+        reward_domain_cap: config.linkRewardDomainCap,
+        reward_monthly_cap: config.linkRewardMonthlyCap,
+      },
       personal: wallets.personal,
       communities: wallets.communities,
       invitations: invitations.map((i) => ({ ...i, invited_at: iso(i.invited_at) })),
@@ -777,4 +785,37 @@ export async function listRequestLinks({ client, params }) {
   const id = idParam(params.id);
   const items = await billingCall(() => requestLinks({ id, clientId: client.id, isAdmin: isAdmin(client) }));
   return { body: { items } };
+}
+
+// Envoi direct d'une liste de liens : `text` brut (texte, Markdown, CSV ou
+// favoris HTML, lu comme par `webpool list submit`) ou `links` structurés.
+// Même validation, même prix et même examen que POST /requests (provider list).
+export async function postList({ client, body, headers = {} }) {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) throw badRequest('Objet JSON attendu');
+  const known = new Set(['pool', 'label', 'text', 'links', 'community']);
+  const unknown = Object.keys(body).filter((k) => !known.has(k));
+  if (unknown.length) throw badRequest(`Champ inconnu : ${unknown.join(', ')}`);
+  for (const key of ['pool', 'label', 'text', 'community']) {
+    if (body[key] != null && typeof body[key] !== 'string') throw badRequest(`${key} doit être une chaîne`);
+  }
+  if (!body.pool) throw badRequest('pool requis');
+  if ((body.text == null) === (body.links == null)) throw badRequest('text (liste brute) ou links (tableau), l\'un des deux');
+  const parsed = body.text != null ? parseLinkText(body.text) : { links: body.links, rejected: [], duplicates: 0 };
+  const res = await billingCall(() =>
+    createRequest({
+      clientId: client.id,
+      isAdmin: isAdmin(client),
+      provider: 'list',
+      query: body.label,
+      pool: body.pool,
+      community: body.community || undefined,
+      links: parsed.links,
+      idempotencyKey: headers['idempotency-key'] ?? null,
+    }),
+  );
+  const { replayed, ...rest } = res;
+  const out = { ...rest, rejected: parsed.rejected, duplicates: parsed.duplicates };
+  return replayed
+    ? { status: 200, body: out, headers: { 'Idempotent-Replayed': 'true' } }
+    : { status: 201, body: out };
 }

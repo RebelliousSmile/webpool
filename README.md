@@ -475,6 +475,28 @@ lien : en attente, en examen, erreur (introuvable, hôte refusé, erreur HTTP,
 réseau), entré ou non dans le pool, déjà connu du corpus. Le titre lu sur la page
 l'emporte sur le titre proposé.
 
+**Envoi direct par l'API.** `POST /api/v1/lists` prend la liste telle quelle
+(`text` : texte, Markdown, CSV ou favoris HTML, lu comme par `list submit`) ou des
+liens structurés (`links`), dans un corps de 256 Ko, et rend les lignes ignorées :
+
+```bash
+curl -X POST "$API/lists" -H "Authorization: Bearer $JETON" -H "Content-Type: application/json" \
+     -H "Idempotency-Key: japon-2026-11" \
+     -d "$(jq -n --rawfile t japon.md '{pool: "japon", label: "Japon : sources", text: $t}')"
+```
+
+**Récompense des liens valides.** Qui apporte, par une liste payée par une
+communauté, un lien **nouveau pour le corpus** qui entre dans le pool visé (classé,
+hors quarantaine, seuils passés) gagne `WEBPOOL_LINK_REWARD` giri (2) sur son
+portefeuille personnel, au post-traitement de `requests run` (écriture `reward` du
+grand livre). Une URL n'est récompensée qu'une fois ; un lien déjà connu, un
+doublon ou un lien hors pool ne rapporte rien, pas plus qu'une liste d'admin ou
+une recherche. Plafonds sur 30 jours glissants : `WEBPOOL_LINK_REWARD_DOMAIN_CAP`
+(5) liens récompensés par domaine et par membre, `WEBPOOL_LINK_REWARD_MONTHLY_CAP`
+(1 000) giri par membre. La récompense est créée par la maison : `billing report`
+la compte à part. Elle ne va pas au pot, où elle compterait comme un apport et
+ferait devenir propriétaire sans avoir rien payé.
+
 **Pools ouverts aux recherches.** Un pool est défini par des critères : une URL
 trouvée par une recherche n'y entre que si elle les remplit. Avec
 `"include_requests": true` dans sa définition, les URLs classées des recherches
@@ -515,6 +537,9 @@ lien de la page de don ou d'achat. Plan, pistes écartées et remise en question
 | `WEBPOOL_REQUEST_MAX_QUEUED` | 5 | recherches en attente au plus par client |
 | `WEBPOOL_LIST_PRICE_PER_LINK` | 1 | giri par lien d'une liste soumise par un membre (≥ 1) |
 | `WEBPOOL_LIST_MAX_LINKS` | 200 | liens au plus par liste |
+| `WEBPOOL_LINK_REWARD` | 2 | giri gagnés par lien valide apporté (0 : aucune récompense) |
+| `WEBPOOL_LINK_REWARD_DOMAIN_CAP` | 5 | liens récompensés au plus par domaine et par membre sur 30 jours |
+| `WEBPOOL_LINK_REWARD_MONTHLY_CAP` | 1000 | giri de récompense au plus par membre sur 30 jours |
 | `WEBPOOL_MIN_CREDIT_CENTS` | 200 | crédit minimal en centimes (`--force` pour passer outre) |
 | `WEBPOOL_MEMBER_DEFAULT_LIMIT` | 1000 | plafond (giri / 30 jours) d'un nouveau membre sans plafond explicite ; `none` : aucun |
 | `WEBPOOL_FUNDING_URL` | aucune | page de don ou d'achat de giri affichée par datapool |
@@ -653,6 +678,7 @@ pnpm webpool account invite --name camille --email camille@atelier.example [--da
 | `GET /requests?community=&status=` | read | recherches du client, ou de la communauté pour ses propriétaires |
 | `POST /requests` | read | achète une recherche (`{query, provider, pages, pool, community}`), ou soumet une liste de liens (`provider: "list"`, `links`), 201 |
 | `DELETE /requests/{id}` | read | annule une recherche en attente, remboursée |
+| `POST /lists` | read | envoie une liste de liens brute (`text`) ou structurée (`links`), 256 Ko au plus, 201 |
 | `GET /requests/{id}/links` | read | sort de chaque lien d'une recherche ou d'une liste (auteur, propriétaires de la communauté qui a payé, admin) |
 | `GET /communities/{slug}/members`, `PUT`/`DELETE …/members/{name}` | read (propriétaires) | membres du plus gros apport au plus petit (rôle calculé, fondateur, plafond, dépense, apports, invitation acceptée) ; invitation, plafond, retrait d'un membre ; le rôle ne se donne pas |
 | `POST`/`DELETE /communities/{slug}/invitation`, `DELETE /communities/{slug}/membership` | read | accepter ou décliner une invitation (listées dans `/billing`), quitter une communauté |

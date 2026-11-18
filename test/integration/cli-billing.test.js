@@ -88,6 +88,7 @@ describe.skipIf(!available)('CLI : communautés, portefeuilles, recherches', () 
     expect(report.out).toContain('dons   : 1, 1.00 €, 1000 giri');
     expect(report.out).toContain('apports : 1, 2.50 €, 2500 giri');
     expect(report.out).toMatch(/encours : 900 giri personnels, 2500 giri de communautés/);
+    expect(report.out).toContain('récompenses : 0 giri pour 0 liens valides');
     expect((await cli('billing', 'nope')).code).toBe(1);
     expect((await cli('requests', 'nope')).code).toBe(1);
   });

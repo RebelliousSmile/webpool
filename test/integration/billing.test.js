@@ -524,12 +524,82 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
       expect(requests.errorCategory({ error: 'ETIMEDOUT' })).toBe('network');
     });
 
+    it('récompense : un lien valide nouveau pour le corpus rapporte des giri au membre, pas un lien connu ni hors pool', async () => {
+      const r = await list('bob', {
+        query: 'Japon',
+        pool: 'lora',
+        links: ['https://unsplash.com/photos/neuf', 'https://github.com/kohya-ss/sd-scripts'],
+      });
+      const res = await requests.runRequests({ offline: true });
+      expect(res.rewards).toEqual([{ id: r.request.id, links: 1, giri: 2 }]);
+      expect(await balanceOf({ name: 'bob' })).toBe(2);
+      const { rows: entries } = await db.query(`SELECT kind, delta, note FROM wallet_entry WHERE search_request_id = $1 AND kind = 'reward'`, [r.request.id]);
+      expect(entries).toEqual([{ kind: 'reward', delta: '2', note: '1 lien valide apporté' }]);
+      const links = (await call('GET', `/requests/${r.request.id}/links`, who.bob)).body.items;
+      expect(links.map((l) => [l.url, l.known, l.reward])).toEqual([
+        ['https://unsplash.com/photos/neuf', false, 2],
+        ['https://github.com/kohya-ss/sd-scripts', true, 0],
+      ]);
+      expect((await requests.listRequests({ clientId: who.bob.id })).items[0].rewarded).toBe(2);
+      // le même lien soumis de nouveau : déjà connu, rien de plus
+      await list('alice', { query: 'bis', pool: 'lora', links: ['https://unsplash.com/photos/neuf'] });
+      expect((await requests.runRequests({ offline: true })).rewards).toEqual([]);
+      // pas de récompense pour une liste d'admin
+      await requests.createRequest({ clientId: who.admin.id, isAdmin: true, provider: 'list', query: 'adm', pool: 'lora', links: ['https://unsplash.com/photos/admin'] });
+      expect((await requests.runRequests({ offline: true })).rewards).toEqual([]);
+      const report = await billing.billingReport({ days: 30 });
+      expect(report.rewards).toEqual({ links: 1, giri: 2, members: 1 });
+      await expectLedgerConsistent();
+    });
+
+    it('récompense : plafond par domaine et plafond mensuel par membre', async () => {
+      const { config } = await import('../../src/config.js');
+      await billing.setMember({ community: 'atelier', name: 'bob', monthlyLimit: null });
+      await list('bob', {
+        query: 'Japon',
+        pool: 'lora',
+        links: ['https://unsplash.com/a', 'https://unsplash.com/b', 'https://unsplash.com/c', 'https://pexels.example/d', 'https://pexels.example/e'],
+      });
+      const res = await requests.runRequests({ offline: true, cfg: { ...config, linkRewardDomainCap: 2, linkRewardMonthlyCap: 6 } });
+      // unsplash plafonné à 2 liens, puis le plafond mensuel (6 giri) arrête au troisième lien récompensé
+      expect(res.rewards[0]).toMatchObject({ links: 3, giri: 6 });
+      const { rows } = await db.query('SELECT domain, count(*)::int AS n FROM link_reward GROUP BY domain ORDER BY domain');
+      expect(rows).toEqual([{ domain: 'pexels.example', n: 1 }, { domain: 'unsplash.com', n: 2 }]);
+    });
+
+    it('POST /lists : liste brute lue côté serveur, liens structurés, grand corps, idempotence', async () => {
+      const text = ['# Japon', '- [Photo AC](https://www.photo-ac.com/)', 'pas un lien', '- https://www.photo-ac.com/'].join('\n');
+      const ok = await call('POST', '/lists', who.bob, { pool: 'lora', label: 'Japon', text }, { 'Idempotency-Key': 'l-1' });
+      expect(ok.status).toBe(201);
+      expect(ok.body).toMatchObject({ request: { provider: 'list', links: 1, community: 'atelier' }, duplicates: 1, rejected: [{ line: 3, text: 'pas un lien' }] });
+      const again = await call('POST', '/lists', who.bob, { pool: 'lora', label: 'Japon', text }, { 'Idempotency-Key': 'l-1' });
+      expect(again.status).toBe(200);
+      expect(again.body.request.id).toBe(ok.body.request.id);
+      const structured = await call('POST', '/lists', who.bob, { pool: 'lora', label: 'J2', links: [{ url: 'https://b.jp', title: 'B' }] });
+      expect(structured.body.request).toMatchObject({ links: 1, price: 1 });
+      expect((await call('POST', '/lists', who.bob, { pool: 'lora', label: 'x' })).status).toBe(400);
+      expect((await call('POST', '/lists', who.bob, { pool: 'lora', label: 'x', text: 'https://a.jp', links: ['https://a.jp'] })).status).toBe(400);
+      expect((await call('POST', '/lists', who.bob, { label: 'x', text: 'https://a.jp' })).status).toBe(400);
+      expect((await call('POST', '/lists', who.carol, { pool: 'lora', label: 'x', text: 'https://a.jp' })).body.error.message).toMatch(/réservée aux pools/);
+      // 150 liens, plus de 8 Ko : accepté sur cette route (admin, gratuit)
+      const big = Array.from({ length: 150 }, (_, i) => `https://sources.example/japon/photographie/lieu-${i}  Lieu numéro ${i}`).join('\n');
+      expect(big.length).toBeGreaterThan(8192);
+      const large = await call('POST', '/lists', who.admin, { pool: 'lora', label: 'Grand', text: big });
+      expect(large).toMatchObject({ status: 201, body: { request: { links: 150, price: 0 } } });
+      // la route générique garde son plafond de 8 Ko
+      const asLinks = big.split('\n').map((l) => ({ url: l.split(' ')[0], title: l.split('  ')[1] }));
+      expect(JSON.stringify(asLinks).length).toBeGreaterThan(8192);
+      expect((await call('POST', '/requests', who.admin, { provider: 'list', query: 'Grand', pool: 'lora', links: asLinks })).status).toBe(413);
+    });
+
     it("le provider list n'entre ni dans la frontière d'exploration ni dans la grille des recherches", async () => {
       const { addQuery } = await import('../../src/explore/index.js');
       await expect(addQuery({ provider: 'list', query: 'x' })).rejects.toThrow('Provider inconnu : list');
       expect(billing.currentPrices({ ...(await import('../../src/config.js')).config, requestProviders: ['list', 'brave'] }).map((p) => p.provider))
         .toEqual(['brave']);
-      expect((await call('GET', '/billing', who.bob)).body.lists).toEqual({ price_per_link: 1, max_links: 200 });
+      expect((await call('GET', '/billing', who.bob)).body.lists).toEqual({
+        price_per_link: 1, max_links: 200, reward_per_link: 2, reward_domain_cap: 5, reward_monthly_cap: 1000,
+      });
     });
   });
 

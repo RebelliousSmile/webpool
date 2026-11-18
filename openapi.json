@@ -1957,6 +1957,100 @@
           }
         }
       }
+    },
+    "/lists": {
+      "post": {
+        "summary": "Envoie une liste de liens (brute ou structurée) : même validation, même prix et même examen qu'une recherche ; les liens valides apportés sont récompensés",
+        "tags": [
+          "recherches"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "comme POST /requests",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,100}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ListInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Liste enregistrée et payée",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListReceipt"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Clé d'idempotence déjà servie : liste existante, rien de débité",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/PaymentRequired"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "description": "Corps de plus de 256 Ko",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Corps autre que application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Trop de recherches en attente ou trop de requêtes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3273,7 +3367,10 @@
             "type": "object",
             "required": [
               "price_per_link",
-              "max_links"
+              "max_links",
+              "reward_per_link",
+              "reward_domain_cap",
+              "reward_monthly_cap"
             ],
             "description": "listes de liens soumises par les membres d'une communauté (provider list)",
             "properties": {
@@ -3284,6 +3381,18 @@
               "max_links": {
                 "type": "integer",
                 "description": "liens au plus par liste, doublons retirés"
+              },
+              "reward_per_link": {
+                "type": "integer",
+                "description": "giri gagnés par lien valide apporté (nouveau pour le corpus, entré dans le pool visé), sur le portefeuille personnel ; 0 : aucune récompense"
+              },
+              "reward_domain_cap": {
+                "type": "integer",
+                "description": "liens récompensés au plus par domaine et par membre sur 30 jours"
+              },
+              "reward_monthly_cap": {
+                "type": "integer",
+                "description": "giri de récompense au plus par membre sur 30 jours"
               }
             }
           }
@@ -3312,9 +3421,10 @@
               "purchase",
               "debit",
               "refund",
-              "adjustment"
+              "adjustment",
+              "reward"
             ],
-            "description": "donation : don sur un portefeuille personnel ; purchase : apport au pot d'une communauté"
+            "description": "donation : don sur un portefeuille personnel ; purchase : apport au pot d'une communauté ; reward : récompense de liens valides apportés"
           },
           "amount_cents": {
             "type": [
@@ -3378,7 +3488,8 @@
           "created_at",
           "started_at",
           "finished_at",
-          "links"
+          "links",
+          "rewarded"
         ],
         "properties": {
           "id": {
@@ -3481,6 +3592,10 @@
               "null"
             ],
             "description": "liste de liens : nombre de liens soumis ; null pour une recherche"
+          },
+          "rewarded": {
+            "type": "integer",
+            "description": "giri gagnés par les liens valides de la liste (portefeuille personnel de l'auteur)"
           }
         }
       },
@@ -3920,7 +4035,8 @@
           "title",
           "outcome",
           "known",
-          "error_category"
+          "error_category",
+          "reward"
         ],
         "properties": {
           "position": {
@@ -3997,6 +4113,106 @@
               "null"
             ],
             "description": "admin seulement"
+          },
+          "reward": {
+            "type": "integer",
+            "description": "giri gagnés par ce lien (0 si déjà connu, hors pool, ou au-delà des plafonds)"
+          }
+        }
+      },
+      "ListInput": {
+        "type": "object",
+        "required": [
+          "pool",
+          "label"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "pool": {
+            "type": "string",
+            "description": "pool visé ; pour un membre, un pool d'une de ses communautés (payé par son pot) ; pour un admin sans community, tout pool (gratuit)"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "libellé de la liste : tracé comme requête, il aide le classement"
+          },
+          "text": {
+            "type": "string",
+            "description": "liste brute : une URL par ligne suivie d'un titre facultatif, Markdown ([titre](url), puces), CSV/TSV (colonne URL détectée) ou export de favoris HTML. Exclusif de links."
+          },
+          "links": {
+            "type": "array",
+            "description": "liens structurés, exclusif de text",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "url"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "community": {
+            "type": "string",
+            "description": "communauté dont le pot paie, si plusieurs possèdent le pool"
+          }
+        }
+      },
+      "ListReceipt": {
+        "type": "object",
+        "required": [
+          "request",
+          "balance",
+          "rejected",
+          "duplicates"
+        ],
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/SearchRequest"
+          },
+          "balance": {
+            "type": "integer"
+          },
+          "rejected": {
+            "type": "array",
+            "description": "lignes de `text` ignorées (pas d'URL http(s))",
+            "items": {
+              "type": "object",
+              "required": [
+                "line",
+                "text"
+              ],
+              "properties": {
+                "line": {
+                  "type": "integer"
+                },
+                "text": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "duplicates": {
+            "type": "integer",
+            "description": "doublons retirés de `text`"
           }
         }
       }

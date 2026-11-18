@@ -38,3 +38,8 @@ centaine de liens thématiques sur le Japon et veut les injecter dans un pool.
 | 8 | Le compte rendu par lien révèle-t-il trop ? | Non | Visible du soumetteur, des propriétaires de la communauté qui a payé et de l'admin, comme la recherche elle-même ; les erreurs brutes de réseau restent réservées à l'admin, le client voit une catégorie. |
 | 9 | Un lien d'une liste marqué doublon d'une URL déjà connue. | Non | La normalisation reporte les sources sur l'URL survivante : le compte rendu suit la survivante et dit « déjà connu ». |
 | 10 | Un fichier HTML de favoris malveillant. | Non | Lu par `DOMParser` côté navigateur (rien n'est exécuté), seuls les `href` http(s) sont gardés ; côté CLI, simple expression régulière sur `HREF`. |
+| 11 | (Demande : récompense) Récompenser les liens apportés crée du giri : farming par liens connus, doublons, pages générées sur son domaine, ou boucle prix 1 / récompense 2. | **Oui** | Lien nouveau pour le corpus et entré dans le pool seulement, une récompense par URL, plafond par domaine et par membre, plafond mensuel ; rien pour l'admin ni pour les recherches. |
+| 12 | Une récompense sur le pot ferait de la curation un moyen de devenir propriétaire sans payer, et donc sans plafond. | **Oui** | Récompense sur le portefeuille personnel. |
+| 13 | Un lien récompensé puis mis en quarantaine plus tard par le contrôle des liens. | Non | Récompense acquise : le lien était sain à l'examen ; les plafonds bornent l'enjeu. Une reprise demanderait un solde négatif possible. |
+| 14 | (Demande : API) 8 Ko de corps ne contiennent pas 200 liens. | **Oui** | Plafond de corps par route : 256 Ko pour `POST /lists`. |
+
