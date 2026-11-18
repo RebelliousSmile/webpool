@@ -9,6 +9,10 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/), versions [Sem
 
 - Comptes clients sur invitation : `webpool account invite --name <client> --email <adresse> [--days 7]` (code à usage unique, affiché une fois) ; API `POST /account/activate`, `/account/login`, `/account/logout`, `/account/password` ; session `wps_` de 30 jours, fermée au changement de mot de passe sur les autres appareils ; le jeton `wp_` reste accepté. Migration `014_account` (e-mail du client, table `api_session`).
 - Recherche globale `GET /search` dans tous les pools visibles par le client, avec le pool et le rang de chaque lien.
+- Listes de liens des communautés : un membre soumet une liste (`POST /requests`, `provider: "list"`, `links`) pour un pool de sa communauté, payée par le pot (`WEBPOOL_LIST_PRICE_PER_LINK` giri par lien, `WEBPOOL_LIST_MAX_LINKS` liens au plus) ; même examen que les liens des providers (`requests run` : ingestion, normalize, classify, media, pool) ; provider virtuel `list`, migration `015_link_lists`, champ `links` des recherches et `lists` de `/billing`.
+- Récompense des liens valides : `WEBPOOL_LINK_REWARD` giri (2) par lien nouveau pour le corpus apporté dans le pool par une liste de communauté, sur le portefeuille personnel (écriture `reward`, table `link_reward`, migration `017_link_rewards`), une fois par URL, plafonds par domaine et mensuel ; champs `rewarded` et `reward`, total dans `billing report`.
+- `POST /api/v1/lists` : envoi direct d'une liste brute (texte, Markdown, CSV, favoris HTML) ou structurée, corps de 256 Ko (plafond de corps par route), lignes ignorées rendues.
+- Listes de liens externes (suite) : soumissions d'admin gratuites pour tout pool, comptées par `include_requests` (migration `016_admin_submissions`) ; `include_requests: "only"` pour un pool composé de ses seules soumissions ; `GET /requests/{id}/links`, sort de chaque lien (catégories d'erreur, déjà connu, entré dans le pool) ; `webpool list submit` lit le texte, le Markdown, le CSV et les favoris HTML.
 
 ## [v0.2.0] - 2026-11-03
 

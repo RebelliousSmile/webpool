@@ -428,6 +428,181 @@ describe.skipIf(!available)('recherches payantes, dons et giri', () => {
     });
   });
 
+  describe('listes de liens des communautés', () => {
+    const list = (name, args) =>
+      requests.createRequest({ clientId: who[name].id, prices: PRICES, listPricing: { perLink: 1, maxLinks: 5 }, provider: 'list', ...args });
+
+    it('soumission : pool de communauté, payée par le pot au prix par lien ; jamais en personnel', async () => {
+      const links = ['https://unsplash.com/photos/kyoto', { url: 'https://nagasaki.example/dejima', title: 'Dejima' }, 'https://unsplash.com/photos/kyoto'];
+      const res = await list('bob', { query: 'Japon : sélection', pool: 'lora', links });
+      expect(res).toMatchObject({ balance: 48, request: { provider: 'list', links: 2, price: 2, community: 'atelier', pages: 1 } });
+      // carol voit lora (accord direct) mais n'est pas membre : pas de liste en personnel
+      await expect(list('carol', { query: 'q', pool: 'lora', links: ['https://a.jp'] })).rejects.toMatchObject({ code: 'invalid', message: expect.stringContaining('réservée aux pools') });
+      await expect(list('bob', { query: 'q', links: ['https://a.jp'] })).rejects.toMatchObject({ code: 'invalid' });
+      await expect(list('bob', { query: 'q', pool: 'lora', links: ['ftp://a.jp'] })).rejects.toMatchObject({ code: 'invalid' });
+      await expect(list('bob', { query: 'q', pool: 'lora', links: Array.from({ length: 6 }, (_, i) => `https://a.jp/${i}`) }))
+        .rejects.toMatchObject({ code: 'invalid', message: expect.stringContaining('5 liens au plus') });
+      await expect(buy('bob', { query: 'q', pool: 'lora', links: ['https://a.jp'] })).rejects.toMatchObject({ message: expect.stringContaining('réservé au provider list') });
+      // le plafond du membre s'applique comme à une recherche (15 giri, 2 déjà engagés)
+      await expect(list('bob', { query: 'q', pool: 'lora', listPricing: { perLink: 7, maxLinks: 5 }, links: ['https://a.jp/1', 'https://a.jp/2'] }))
+        .rejects.toMatchObject({ code: 'spend_limit' });
+      await expectLedgerConsistent();
+    });
+
+    it("examen identique à une recherche : ingestion tracée, normalize, classify, entrée dans le pool par include_requests", async () => {
+      const r = await list('bob', {
+        query: 'Japon sélection',
+        pool: 'lora',
+        links: [{ url: 'https://unsplash.com/photos/kyoto-temple', title: 'Kyoto temple' }, 'https://github.com/kohya-ss/sd-scripts'],
+      });
+      // le vrai ingest : le provider list ne fait aucun appel réseau
+      const res = await requests.runRequests({ offline: true });
+      expect(res.ok).toBe(true);
+      expect(res.requests).toEqual([expect.objectContaining({ id: r.request.id, calls: 1, newUrls: 1, refunded: 0, error: null })]);
+      const item = (await requests.listRequests({ clientId: who.bob.id })).items[0];
+      expect(item).toMatchObject({ status: 'done', provider: 'list', links: 2, results: 2, new_urls: 1, in_pool: 2 });
+      // la photo hors thème entre par include_requests ; le lien déjà connu y était
+      expect(await poolDomains('lora')).toEqual(['github.com', 'unsplash.com']);
+      const { rows } = await db.query(
+        `SELECT us.provider, us.query, us.serp_rank, ui.title FROM url_source us JOIN url_item ui ON ui.id = us.url_item_id
+          WHERE us.search_request_id = $1 ORDER BY us.serp_rank`,
+        [r.request.id],
+      );
+      expect(rows.map((x) => [x.provider, x.query, x.serp_rank])).toEqual([['list', 'Japon sélection', 1], ['list', 'Japon sélection', 2]]);
+      expect(rows[0].title).toBe('Kyoto temple');
+    });
+
+    it("admin : liste gratuite pour n'importe quel pool ; un pool \"only\" ne contient qu'elle", async () => {
+      await db.query(`UPDATE pool SET definition = '{"theme": "photographie", "include_requests": "only"}' WHERE slug = 'autre'`);
+      const r = await requests.createRequest({
+        clientId: who.admin.id,
+        isAdmin: true,
+        provider: 'list',
+        query: 'Japon : sélection',
+        pool: 'autre',
+        links: ['https://unsplash.com/photos/kyoto', { url: 'https://photo-ac.example/nagasaki', title: 'Nagasaki' }],
+      });
+      expect(r).toMatchObject({ balance: 0, request: { price: 0, unit_price: 0, community: null, links: 2 } });
+      const { rows: entries } = await db.query('SELECT count(*)::int AS n FROM wallet_entry WHERE search_request_id = $1', [r.request.id]);
+      expect(entries[0].n).toBe(0);
+      const runRes = await requests.runRequests({ offline: true });
+      expect(runRes.ok).toBe(true);
+      // seul le contenu de la liste, et pas l'URL ia-generative du corpus
+      expect(await poolDomains('autre')).toEqual(['photo-ac.example', 'unsplash.com']);
+      // une liste personnelle d'un membre vers ce pool n'y entre pas
+      await expect(list('carol', { query: 'q', pool: 'autre', links: ['https://a.jp'] })).rejects.toMatchObject({ code: 'not_found' });
+    });
+
+    it('compte rendu par lien : sort de chaque lien, catégorie d’erreur, accès restreint', async () => {
+      const r = await list('bob', {
+        query: 'Japon',
+        pool: 'lora',
+        links: ['https://unsplash.com/photos/a', 'https://github.com/kohya-ss/sd-scripts', 'https://mort.example/404'],
+      });
+      const before = await call('GET', `/requests/${r.request.id}/links`, who.bob);
+      expect(before.body.items.map((l) => [l.position, l.outcome])).toEqual([[1, 'queued'], [2, 'queued'], [3, 'queued']]);
+      await requests.runRequests({ offline: true });
+      // hors ligne rien ne répond 404 : on le simule sur la troisième URL
+      await db.query(`UPDATE url_item SET status = 'error', http_status = 404, error = 'HTTP 404' WHERE raw_url = 'https://mort.example/404'`);
+      const after = await call('GET', `/requests/${r.request.id}/links`, who.bob);
+      expect(after.body.items.map((l) => [l.position, l.url, l.outcome, l.known, l.error_category])).toEqual([
+        [1, 'https://unsplash.com/photos/a', 'in_pool', false, null],
+        [2, 'https://github.com/kohya-ss/sd-scripts', 'in_pool', true, null],
+        [3, 'https://mort.example/404', 'error', false, 'not_found'],
+      ]);
+      expect(after.body.items[2]).not.toHaveProperty('error');
+      // un lien classé puis mis en quarantaine par le contrôle des liens
+      await db.query(`UPDATE url_item SET quarantined_at = now() WHERE raw_url = 'https://unsplash.com/photos/a'`);
+      expect((await call('GET', `/requests/${r.request.id}/links`, who.bob)).body.items[0]).toMatchObject({ outcome: 'error', error_category: 'quarantined' });
+      await db.query(`UPDATE url_item SET quarantined_at = NULL WHERE raw_url = 'https://unsplash.com/photos/a'`);
+      // propriétaire de la communauté qui a payé : oui ; un autre client : non ; l'admin voit l'erreur brute
+      expect((await call('GET', `/requests/${r.request.id}/links`, who.alice)).status).toBe(200);
+      expect((await call('GET', `/requests/${r.request.id}/links`, who.carol)).status).toBe(404);
+      expect((await call('GET', `/requests/${r.request.id}/links`, who.admin)).body.items[2]).toMatchObject({ error: 'HTTP 404', http_status: 404 });
+      expect(requests.errorCategory({ error: 'hôte refusé : 10.0.0.1' })).toBe('host_refused');
+      expect(requests.errorCategory({ error: 'HTTP 500', http_status: 500 })).toBe('http_error');
+      expect(requests.errorCategory({ error: 'ETIMEDOUT' })).toBe('network');
+    });
+
+    it('récompense : un lien valide nouveau pour le corpus rapporte des giri au membre, pas un lien connu ni hors pool', async () => {
+      const r = await list('bob', {
+        query: 'Japon',
+        pool: 'lora',
+        links: ['https://unsplash.com/photos/neuf', 'https://github.com/kohya-ss/sd-scripts'],
+      });
+      const res = await requests.runRequests({ offline: true });
+      expect(res.rewards).toEqual([{ id: r.request.id, links: 1, giri: 2 }]);
+      expect(await balanceOf({ name: 'bob' })).toBe(2);
+      const { rows: entries } = await db.query(`SELECT kind, delta, note FROM wallet_entry WHERE search_request_id = $1 AND kind = 'reward'`, [r.request.id]);
+      expect(entries).toEqual([{ kind: 'reward', delta: '2', note: '1 lien valide apporté' }]);
+      const links = (await call('GET', `/requests/${r.request.id}/links`, who.bob)).body.items;
+      expect(links.map((l) => [l.url, l.known, l.reward])).toEqual([
+        ['https://unsplash.com/photos/neuf', false, 2],
+        ['https://github.com/kohya-ss/sd-scripts', true, 0],
+      ]);
+      expect((await requests.listRequests({ clientId: who.bob.id })).items[0].rewarded).toBe(2);
+      // le même lien soumis de nouveau : déjà connu, rien de plus
+      await list('alice', { query: 'bis', pool: 'lora', links: ['https://unsplash.com/photos/neuf'] });
+      expect((await requests.runRequests({ offline: true })).rewards).toEqual([]);
+      // pas de récompense pour une liste d'admin
+      await requests.createRequest({ clientId: who.admin.id, isAdmin: true, provider: 'list', query: 'adm', pool: 'lora', links: ['https://unsplash.com/photos/admin'] });
+      expect((await requests.runRequests({ offline: true })).rewards).toEqual([]);
+      const report = await billing.billingReport({ days: 30 });
+      expect(report.rewards).toEqual({ links: 1, giri: 2, members: 1 });
+      await expectLedgerConsistent();
+    });
+
+    it('récompense : plafond par domaine et plafond mensuel par membre', async () => {
+      const { config } = await import('../../src/config.js');
+      await billing.setMember({ community: 'atelier', name: 'bob', monthlyLimit: null });
+      await list('bob', {
+        query: 'Japon',
+        pool: 'lora',
+        links: ['https://unsplash.com/a', 'https://unsplash.com/b', 'https://unsplash.com/c', 'https://pexels.example/d', 'https://pexels.example/e'],
+      });
+      const res = await requests.runRequests({ offline: true, cfg: { ...config, linkRewardDomainCap: 2, linkRewardMonthlyCap: 6 } });
+      // unsplash plafonné à 2 liens, puis le plafond mensuel (6 giri) arrête au troisième lien récompensé
+      expect(res.rewards[0]).toMatchObject({ links: 3, giri: 6 });
+      const { rows } = await db.query('SELECT domain, count(*)::int AS n FROM link_reward GROUP BY domain ORDER BY domain');
+      expect(rows).toEqual([{ domain: 'pexels.example', n: 1 }, { domain: 'unsplash.com', n: 2 }]);
+    });
+
+    it('POST /lists : liste brute lue côté serveur, liens structurés, grand corps, idempotence', async () => {
+      const text = ['# Japon', '- [Photo AC](https://www.photo-ac.com/)', 'pas un lien', '- https://www.photo-ac.com/'].join('\n');
+      const ok = await call('POST', '/lists', who.bob, { pool: 'lora', label: 'Japon', text }, { 'Idempotency-Key': 'l-1' });
+      expect(ok.status).toBe(201);
+      expect(ok.body).toMatchObject({ request: { provider: 'list', links: 1, community: 'atelier' }, duplicates: 1, rejected: [{ line: 3, text: 'pas un lien' }] });
+      const again = await call('POST', '/lists', who.bob, { pool: 'lora', label: 'Japon', text }, { 'Idempotency-Key': 'l-1' });
+      expect(again.status).toBe(200);
+      expect(again.body.request.id).toBe(ok.body.request.id);
+      const structured = await call('POST', '/lists', who.bob, { pool: 'lora', label: 'J2', links: [{ url: 'https://b.jp', title: 'B' }] });
+      expect(structured.body.request).toMatchObject({ links: 1, price: 1 });
+      expect((await call('POST', '/lists', who.bob, { pool: 'lora', label: 'x' })).status).toBe(400);
+      expect((await call('POST', '/lists', who.bob, { pool: 'lora', label: 'x', text: 'https://a.jp', links: ['https://a.jp'] })).status).toBe(400);
+      expect((await call('POST', '/lists', who.bob, { label: 'x', text: 'https://a.jp' })).status).toBe(400);
+      expect((await call('POST', '/lists', who.carol, { pool: 'lora', label: 'x', text: 'https://a.jp' })).body.error.message).toMatch(/réservée aux pools/);
+      // 150 liens, plus de 8 Ko : accepté sur cette route (admin, gratuit)
+      const big = Array.from({ length: 150 }, (_, i) => `https://sources.example/japon/photographie/lieu-${i}  Lieu numéro ${i}`).join('\n');
+      expect(big.length).toBeGreaterThan(8192);
+      const large = await call('POST', '/lists', who.admin, { pool: 'lora', label: 'Grand', text: big });
+      expect(large).toMatchObject({ status: 201, body: { request: { links: 150, price: 0 } } });
+      // la route générique garde son plafond de 8 Ko
+      const asLinks = big.split('\n').map((l) => ({ url: l.split(' ')[0], title: l.split('  ')[1] }));
+      expect(JSON.stringify(asLinks).length).toBeGreaterThan(8192);
+      expect((await call('POST', '/requests', who.admin, { provider: 'list', query: 'Grand', pool: 'lora', links: asLinks })).status).toBe(413);
+    });
+
+    it("le provider list n'entre ni dans la frontière d'exploration ni dans la grille des recherches", async () => {
+      const { addQuery } = await import('../../src/explore/index.js');
+      await expect(addQuery({ provider: 'list', query: 'x' })).rejects.toThrow('Provider inconnu : list');
+      expect(billing.currentPrices({ ...(await import('../../src/config.js')).config, requestProviders: ['list', 'brave'] }).map((p) => p.provider))
+        .toEqual(['brave']);
+      expect((await call('GET', '/billing', who.bob)).body.lists).toEqual({
+        price_per_link: 1, max_links: 200, reward_per_link: 2, reward_domain_cap: 5, reward_monthly_cap: 1000,
+      });
+    });
+  });
+
   describe('rapport et grand livre', () => {
     it('crédits, giri dépensés nets, coût, marge et encours', async () => {
       await buy('carol', { query: 'r', pages: 2 });

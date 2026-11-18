@@ -78,3 +78,33 @@ describe('prix des recherches', () => {
     expect(() => checkRequest({ provider: 'brave', query: 'q', pages: 1.5 }, prices)).toThrow(/pages/);
   });
 });
+
+describe('listes de liens', () => {
+  const pricing = { perLink: 2, maxLinks: 3 };
+  it('libellé, liens http(s) dédoublonnés, titres facultatifs, prix d’un bloc', async () => {
+    const { checkLinkList } = await import('../src/billing/pricing.js');
+    expect(checkLinkList({ query: '  Japon   sélection ', links: ['https://a.jp/x', { url: 'https://b.jp', title: ' B ' }, 'https://a.jp/x'] }, pricing))
+      .toEqual({
+        provider: 'list',
+        query: 'Japon sélection',
+        pages: 1,
+        unitPrice: 4,
+        links: [{ url: 'https://a.jp/x', title: null }, { url: 'https://b.jp', title: 'B' }],
+      });
+  });
+
+  it('refuse libellé vide, liste vide, URL invalide ou non http, titre trop long, trop de liens', async () => {
+    const { checkLinkList } = await import('../src/billing/pricing.js');
+    const check = (args) => () => checkLinkList(args, pricing);
+    expect(check({ query: ' ', links: ['https://a.jp'] })).toThrow(/libellé de la liste/);
+    expect(check({ query: 'x'.repeat(201), links: ['https://a.jp'] })).toThrow(/200 caractères/);
+    expect(check({ query: 'q', links: [] })).toThrow(/links requis/);
+    expect(check({ query: 'q', links: 'https://a.jp' })).toThrow(/links requis/);
+    expect(check({ query: 'q', links: [{}] })).toThrow(/lien 1 : URL manquante/);
+    expect(check({ query: 'q', links: ['pas une url'] })).toThrow(/lien 1 : URL invalide/);
+    expect(check({ query: 'q', links: ['file:///etc/passwd'] })).toThrow(/http ou https seulement/);
+    expect(check({ query: 'q', links: [`https://a.jp/${'x'.repeat(2000)}`] })).toThrow(/2000 caractères/);
+    expect(check({ query: 'q', links: [{ url: 'https://a.jp', title: 'x'.repeat(301) }] })).toThrow(/titre de 300/);
+    expect(check({ query: 'q', links: ['https://a.jp/1', 'https://a.jp/2', 'https://a.jp/3', 'https://a.jp/4'] })).toThrow(/3 liens au plus/);
+  });
+});

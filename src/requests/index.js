@@ -12,7 +12,7 @@ import { ingest } from '../ingest/index.js';
 import { exclusionFor, loadSaturated } from '../explore/index.js';
 import { processPending, refreshPools } from '../pipeline/index.js';
 import { BillingError, currentPrices, ensureWallet, postEntry, spentLast30Days } from '../billing/index.js';
-import { callCostUsd, checkRequest, parseCallCosts } from '../billing/pricing.js';
+import { LIST_PROVIDER, callCostUsd, checkLinkList, checkRequest, parseCallCosts } from '../billing/pricing.js';
 
 export const REQUEST_STATUSES = ['queued', 'running', 'done', 'failed', 'cancelled'];
 const STATUS_LABELS = { queued: 'en attente', running: 'en cours', done: 'faite', failed: 'en échec', cancelled: 'annulée' };
@@ -31,7 +31,8 @@ export const PUBLIC_ERRORS = {
 // `in_pool` se calcule à la lecture : URLs de la recherche présentes aujourd'hui
 // dans le pool qu'elle vise.
 const REQUEST_COLUMNS = `sr.id, sr.provider, sr.query, sr.pages, sr.unit_price, sr.price, sr.refunded, sr.status,
-  sr.calls_done, sr.results, sr.new_urls, sr.new_domains, sr.error, sr.error_kind,
+  sr.calls_done, sr.results, sr.new_urls, sr.new_domains, sr.error, sr.error_kind, sr.rewarded,
+  CASE WHEN sr.links IS NULL THEN NULL ELSE jsonb_array_length(sr.links) END AS links_count,
   CASE WHEN sr.pool_id IS NULL THEN NULL ELSE
     (SELECT count(DISTINCT pi.url_item_id)::int FROM pool_item pi
        JOIN url_source us ON us.url_item_id = pi.url_item_id AND us.search_request_id = sr.id
@@ -53,11 +54,15 @@ export function formatRequest(r, { admin = false } = {}) {
     provider: r.provider,
     query: r.query,
     pages: r.pages,
+    // liste de liens : nombre de liens soumis (null pour une recherche)
+    links: r.links_count ?? null,
     pool: r.pool,
     community: r.community,
     unit_price: Number(r.unit_price),
     price: Number(r.price),
     refunded: Number(r.refunded),
+    // giri gagnés par les liens valides de la liste
+    rewarded: Number(r.rewarded ?? 0),
     status: r.status,
     calls_done: r.calls_done,
     results: r.results,
@@ -98,20 +103,30 @@ export async function createRequest({
   pages,
   pool,
   community,
+  links,
   idempotencyKey = null,
   prices = currentPrices(),
   maxQueued = config.requestMaxQueued,
+  listPricing = { perLink: config.listPricePerLink, maxLinks: config.listMaxLinks },
 }) {
   if (idempotencyKey !== null && !IDEMPOTENCY_KEY_RE.test(idempotencyKey)) {
     throw new BillingError('invalid', 'Idempotency-Key : 1 à 100 caractères parmi A-Z a-z 0-9 _ -');
   }
+  // Une liste de liens (provider `list`) se valide à part : ses liens sont ses
+  // résultats, payés d'un bloc. Ensuite, tout est commun avec les recherches.
+  const isList = provider === LIST_PROVIDER;
   let checked;
   try {
-    checked = checkRequest({ provider, query: text, pages }, prices);
+    if (!isList && links !== undefined) throw new Error('links : réservé au provider list');
+    checked = isList ? checkLinkList({ query: text, links }, listPricing) : checkRequest({ provider, query: text, pages }, prices);
   } catch (err) {
     throw new BillingError('invalid', err.message);
   }
-  const price = checked.unitPrice * checked.pages;
+  // Un admin (la maison) ne se facture pas : sans communauté désignée, sa
+  // soumission est gratuite, pour tout pool, et compte pour include_requests.
+  const free = isAdmin && !community;
+  const unitPrice = free ? 0 : checked.unitPrice;
+  const price = unitPrice * checked.pages;
 
   return withTransaction(async (db) => {
     // Sérialise les achats d'un même client (file d'attente, idempotence) par
@@ -141,7 +156,7 @@ export async function createRequest({
     let payer = community;
     // Dans une communauté, on ne paie pas pour soi : une recherche sur un pool
     // d'une de ses communautés se paie sur le pot commun, jamais en personnel.
-    if (poolId !== null && !payer) {
+    if (poolId !== null && !payer && !free) {
       const { rows: payers } = await db.query(
         `SELECT c.slug FROM community_pool cp
            JOIN community c ON c.id = cp.community_id
@@ -153,6 +168,11 @@ export async function createRequest({
         throw new BillingError('invalid', `Pool de plusieurs de vos communautés : préciser laquelle paie (${payers.map((r) => r.slug).join(', ')})`);
       }
       if (payers.length === 1) payer = payers[0].slug;
+    }
+    // Une liste n'entre que dans un pool de communauté, payée par son pot :
+    // jamais d'injection sur un portefeuille personnel.
+    if (isList && !payer && !free) {
+      throw new BillingError('invalid', "Liste de liens : réservée aux pools d'une de vos communautés (pool requis)");
     }
     let wallet;
     let member = null;
@@ -186,12 +206,14 @@ export async function createRequest({
     }
 
     const { rows } = await db.query(
-      `INSERT INTO search_request (api_client_id, wallet_id, pool_id, provider, query, pages, unit_price, price, idempotency_key)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-      [clientId, wallet.id, poolId, checked.provider, checked.query, checked.pages, checked.unitPrice, price, idempotencyKey],
+      `INSERT INTO search_request (api_client_id, wallet_id, pool_id, provider, query, pages, unit_price, price, idempotency_key, links)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+      [clientId, wallet.id, poolId, checked.provider, checked.query, checked.pages, unitPrice, price, idempotencyKey,
+        isList ? JSON.stringify(checked.links) : null],
     );
     const id = Number(rows[0].id);
-    const balance = await postEntry(db, { walletId: wallet.id, delta: -price, kind: 'debit', requestId: id, clientId });
+    // Gratuit : aucune écriture au grand livre.
+    const balance = price === 0 ? wallet.balance : await postEntry(db, { walletId: wallet.id, delta: -price, kind: 'debit', requestId: id, clientId });
     if (balance === null) {
       throw new BillingError('insufficient_balance', `Solde insuffisant : ${price} giri nécessaires, ${wallet.balance} disponibles`);
     }
@@ -303,6 +325,8 @@ async function execute(r, { saturated, ingestImpl, estimate, maxChars }) {
         excludeDomains: exclusion.excludeDomains,
         page,
         requestId: Number(r.id),
+        // liste de liens : ses liens sont ses résultats
+        ...(r.provider === LIST_PROVIDER ? { input: r.links } : {}),
       });
     } catch (err) {
       error = String(err.message ?? err).slice(0, 500);
@@ -338,7 +362,7 @@ async function execute(r, { saturated, ingestImpl, estimate, maxChars }) {
 // run comme celles qu'un run précédent n'a pas pu finir : normalize et classify
 // de leurs URLs, puis refresh de leurs pools. Marquées traitées seulement si
 // tout a réussi ; sinon reprises au run suivant.
-async function postProcess({ offline, batch }) {
+async function postProcess({ offline, batch, rewardRules }) {
   const { rows: pending } = await query(
     `SELECT sr.id, p.slug AS pool FROM search_request sr LEFT JOIN pool p ON p.id = sr.pool_id
       WHERE sr.status = 'done' AND sr.processed_at IS NULL ORDER BY sr.id`,
@@ -356,8 +380,16 @@ async function postProcess({ offline, batch }) {
   // Les médias ne conditionnent pas la reprise : une vignette manquante n'empêche
   // pas les liens d'être dans le pool.
   const ok = steps.filter((s) => s.name !== 'media').every((s) => s.ok) && (poolStep.result?.failures ?? 1) === 0;
-  if (ok) await query('UPDATE search_request SET processed_at = now() WHERE id = ANY($1)', [requestIds]);
-  return { requests: requestIds, steps, pools: poolStep.result?.items ?? [], ok };
+  // Récompenses et marque « traité » ensemble : une reprise ne récompense pas deux fois.
+  let rewards = [];
+  if (ok) {
+    rewards = await withTransaction(async (db) => {
+      const granted = await grantRewards(db, requestIds, rewardRules);
+      await db.query('UPDATE search_request SET processed_at = now() WHERE id = ANY($1)', [requestIds]);
+      return granted;
+    });
+  }
+  return { requests: requestIds, steps, pools: poolStep.result?.items ?? [], ok, rewards };
 }
 
 // Tâche planifiée : exécute jusqu'à `limit` recherches en attente, puis
@@ -394,7 +426,146 @@ export async function runRequests({
         return { executed: done.length };
       });
     }
-    const post = await postProcess({ offline, batch });
-    return { recovered, requests: done, processed: post.requests, steps: post.steps, pools: post.pools, ok: post.ok ?? true };
+    const rewardRules = { perLink: cfg.linkReward, domainCap: cfg.linkRewardDomainCap, monthlyCap: cfg.linkRewardMonthlyCap };
+    const post = await postProcess({ offline, batch, rewardRules });
+    return {
+      recovered, requests: done, processed: post.requests, steps: post.steps, pools: post.pools, ok: post.ok ?? true, rewards: post.rewards ?? [],
+    };
   });
+}
+
+// --- Récompense des liens valides
+
+// Liens valides des listes `requestIds`, dans l'ordre de soumission : liste
+// payée par une communauté (pas l'admin), lien classé, hors quarantaine, dans
+// le pool visé, nouveau pour le corpus au moment de la soumission, jamais
+// récompensé. Plafonds sur 30 jours par membre (`monthlyCap` giri) et par
+// membre et domaine (`domainCap` liens). Les giri vont sur le portefeuille
+// personnel du membre (écriture `reward`), une écriture par liste.
+async function grantRewards(db, requestIds, { perLink, domainCap, monthlyCap }) {
+  if (perLink <= 0 || requestIds.length === 0) return [];
+  const { rows: candidates } = await db.query(
+    `SELECT sr.id AS request_id, sr.api_client_id AS client_id, ui.id AS url_item_id, ui.domain
+       FROM search_request sr
+       JOIN wallet w ON w.id = sr.wallet_id AND w.community_id IS NOT NULL
+       JOIN api_client ac ON ac.id = sr.api_client_id AND ac.scope <> 'admin'
+       JOIN url_source us ON us.search_request_id = sr.id
+       JOIN url_item ui ON ui.id = us.url_item_id
+       JOIN pool_item pi ON pi.pool_id = sr.pool_id AND pi.url_item_id = ui.id
+      WHERE sr.id = ANY($1) AND sr.provider = $2
+        AND ui.status = 'classified' AND ui.quarantined_at IS NULL
+        AND ui.first_seen_at >= sr.created_at
+        AND NOT EXISTS (SELECT 1 FROM link_reward lr WHERE lr.url_item_id = ui.id)
+      ORDER BY sr.id, us.serp_rank, us.id`,
+    [requestIds, LIST_PROVIDER],
+  );
+  const used = new Map(); // client → { giri, domains: Map(domain → liens) } sur 30 jours
+  const usage = async (clientId) => {
+    if (!used.has(clientId)) {
+      const { rows } = await db.query(
+        `SELECT domain, count(*)::int AS n, sum(giri)::bigint AS giri FROM link_reward
+          WHERE api_client_id = $1 AND created_at > now() - interval '30 days' GROUP BY domain`,
+        [clientId],
+      );
+      used.set(clientId, {
+        giri: rows.reduce((t, r) => t + Number(r.giri), 0),
+        domains: new Map(rows.map((r) => [r.domain, r.n])),
+      });
+    }
+    return used.get(clientId);
+  };
+  const perRequest = new Map();
+  const seenItems = new Set();
+  for (const c of candidates) {
+    if (seenItems.has(c.url_item_id)) continue;
+    const u = await usage(c.client_id);
+    if (u.giri + perLink > monthlyCap || (u.domains.get(c.domain) ?? 0) >= domainCap) continue;
+    seenItems.add(c.url_item_id);
+    u.giri += perLink;
+    u.domains.set(c.domain, (u.domains.get(c.domain) ?? 0) + 1);
+    await db.query(
+      `INSERT INTO link_reward (url_item_id, search_request_id, api_client_id, domain, giri) VALUES ($1, $2, $3, $4, $5)`,
+      [c.url_item_id, c.request_id, c.client_id, c.domain, perLink],
+    );
+    const r = perRequest.get(c.request_id) ?? { clientId: c.client_id, links: 0 };
+    r.links += 1;
+    perRequest.set(c.request_id, r);
+  }
+  const granted = [];
+  for (const [requestId, r] of perRequest) {
+    const giri = r.links * perLink;
+    const wallet = await ensureWallet(db, { clientId: r.clientId });
+    await postEntry(db, {
+      walletId: wallet.id, delta: giri, kind: 'reward', requestId, clientId: r.clientId,
+      note: `${r.links} lien${r.links > 1 ? 's' : ''} valide${r.links > 1 ? 's' : ''} apporté${r.links > 1 ? 's' : ''}`,
+    });
+    await db.query('UPDATE search_request SET rewarded = rewarded + $2 WHERE id = $1', [requestId, giri]);
+    granted.push({ id: Number(requestId), links: r.links, giri });
+  }
+  return granted;
+}
+
+// --- Compte rendu lien par lien d'une recherche ou d'une liste
+
+// Catégorie d'une erreur de normalisation, exposée aux clients (le message
+// brut reste réservé à l'admin).
+export function errorCategory({ error, http_status: httpStatus }) {
+  if (httpStatus === 404 || httpStatus === 410) return 'not_found';
+  if (/hôte refusé/i.test(error ?? '')) return 'host_refused';
+  if (httpStatus && httpStatus >= 400) return 'http_error';
+  return 'network';
+}
+
+// Sort de chaque lien : position (ordre de soumission, ou rang dans les
+// résultats), URL soumise, URL canonique, état. Visible de l'auteur, des
+// propriétaires de la communauté qui a payé, et de l'admin.
+export async function requestLinks({ id, clientId, isAdmin = false }) {
+  const { rows: req } = await query(
+    `SELECT sr.id, sr.links, sr.pool_id, sr.created_at, sr.status FROM search_request sr
+       JOIN wallet w ON w.id = sr.wallet_id
+      WHERE sr.id = $1
+        AND ($2 OR sr.api_client_id = $3
+             OR EXISTS (SELECT 1 FROM community_standing st
+                         WHERE st.community_id = w.community_id AND st.api_client_id = $3 AND st.is_owner))`,
+    [id, isAdmin, clientId],
+  );
+  if (req.length === 0) throw new BillingError('not_found', `Recherche inconnue : ${id}`);
+  const r = req[0];
+  const { rows } = await query(
+    `SELECT us.serp_rank AS position, ui.raw_url, ui.canonical_url, ui.domain, ui.title, ui.status, ui.error, ui.http_status,
+            ui.first_seen_at < $2 AS known, ui.quarantined_at IS NOT NULL AS quarantined,
+            EXISTS (SELECT 1 FROM pool_item pi WHERE pi.pool_id = $3 AND pi.url_item_id = ui.id) AS in_pool,
+            (SELECT lr.giri FROM link_reward lr WHERE lr.url_item_id = ui.id AND lr.search_request_id = $1) AS reward
+       FROM url_source us JOIN url_item ui ON ui.id = us.url_item_id
+      WHERE us.search_request_id = $1
+      ORDER BY us.serp_rank NULLS LAST, us.id`,
+    [id, r.created_at, r.pool_id],
+  );
+  const submitted = Array.isArray(r.links) ? r.links : null;
+  const items = rows.map((row) => {
+    // Lien mis en quarantaine par le contrôle des liens (lien mort) : erreur.
+    const outcome =
+      row.status === 'error' || row.quarantined ? 'error'
+        : row.status === 'classified' ? (r.pool_id === null ? 'in_corpus' : row.in_pool ? 'in_pool' : 'not_in_pool')
+          : 'examining';
+    return {
+      position: row.position,
+      url: submitted?.[row.position - 1]?.url ?? row.raw_url,
+      canonical_url: row.canonical_url,
+      domain: row.domain,
+      title: row.title,
+      outcome,
+      known: row.known,
+      reward: row.reward === null || row.reward === undefined ? 0 : Number(row.reward),
+      error_category: outcome === 'error' ? (row.quarantined && row.status !== 'error' ? 'quarantined' : errorCategory(row)) : null,
+      ...(isAdmin ? { error: row.error, http_status: row.http_status } : {}),
+    };
+  });
+  // Liste pas encore ingérée : ses liens, en attente.
+  if (items.length === 0 && submitted) {
+    return submitted.map((l, i) => ({
+      position: i + 1, url: l.url, canonical_url: null, domain: null, title: l.title, outcome: 'queued', known: false, reward: 0, error_category: null,
+    }));
+  }
+  return items;
 }

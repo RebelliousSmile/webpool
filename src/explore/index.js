@@ -12,8 +12,9 @@ export const QUERY_STATUSES = ['active', 'exhausted', 'paused'];
 const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function assertProvider(provider) {
-  if (!providers[provider]) {
-    throw new Error(`Provider inconnu : ${provider} (disponibles : ${Object.keys(providers).join(', ')})`);
+  // `list` ne sert qu'aux listes soumises par les communautés.
+  if (!providers[provider] || provider === 'list') {
+    throw new Error(`Provider inconnu : ${provider} (disponibles : ${Object.keys(providers).filter((p) => p !== 'list').join(', ')})`);
   }
 }
 

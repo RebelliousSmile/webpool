@@ -321,7 +321,7 @@ export async function walletsFor(clientId) {
 // Recettes et dépenses sur `days` jours : giri crédités (et €), giri dépensés
 // net des remboursements, coût des providers, par provider.
 export async function billingReport({ days = 30, usdEur = config.usdEur, giriPerEur = config.giriPerEur } = {}) {
-  const [{ rows: credits }, { rows: byProvider }, { rows: outstanding }] = await Promise.all([
+  const [{ rows: credits }, { rows: byProvider }, { rows: outstanding }, { rows: rewards }] = await Promise.all([
     query(
       `SELECT kind, count(*)::int AS entries, sum(delta)::bigint AS giri, coalesce(sum(amount_cents), 0)::bigint AS cents
          FROM wallet_entry WHERE kind IN ('donation', 'purchase') AND created_at > now() - make_interval(days => $1)
@@ -341,6 +341,12 @@ export async function billingReport({ days = 30, usdEur = config.usdEur, giriPer
               coalesce(sum(balance) FILTER (WHERE community_id IS NOT NULL), 0)::bigint AS communities
          FROM wallet`,
     ),
+    // Récompenses des liens valides : giri créés par la maison.
+    query(
+      `SELECT count(*)::int AS links, coalesce(sum(giri), 0)::bigint AS giri, count(DISTINCT api_client_id)::int AS members
+         FROM link_reward WHERE created_at > now() - make_interval(days => $1)`,
+      [days],
+    ),
   ]);
   const providersOut = byProvider.map((r) => {
     const revenueEur = Number(r.giri) / giriPerEur;
@@ -359,6 +365,7 @@ export async function billingReport({ days = 30, usdEur = config.usdEur, giriPer
   return {
     days,
     outstanding: { ...owed, eur: (owed.personal + owed.communities) / giriPerEur },
+    rewards: { links: rewards[0].links, giri: Number(rewards[0].giri), members: rewards[0].members },
     credits: credits.map((c) => ({ kind: c.kind, entries: c.entries, giri: Number(c.giri), eur: Number(c.cents) / 100 })),
     providers: providersOut,
   };

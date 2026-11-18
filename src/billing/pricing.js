@@ -19,7 +19,13 @@ export const DEFAULT_CALL_COSTS_USD = Object.freeze({
 
 // Le provider `file` lit un fichier du serveur dont le chemin est la requête :
 // jamais ouvert aux recherches, quelle que soit la configuration.
-export const FORBIDDEN_REQUEST_PROVIDERS = Object.freeze(['file']);
+export const FORBIDDEN_REQUEST_PROVIDERS = Object.freeze(['file', 'list']);
+
+// Provider virtuel des listes de liens soumises par les membres d'une
+// communauté : ses « résultats » sont la liste elle-même, sans appel réseau.
+export const LIST_PROVIDER = 'list';
+export const MAX_LINK_CHARS = 2000;
+export const MAX_LINK_TITLE_CHARS = 300;
 
 // Providers qui ne paginent pas : une recherche n'y achète qu'une page.
 export const SINGLE_PAGE_PROVIDERS = Object.freeze(['openrouter']);
@@ -99,4 +105,38 @@ export function checkRequest({ provider, query, pages }, prices) {
     throw new Error(`pages doit être un entier entre 1 et ${price.max_pages} pour ${provider}`);
   }
   return { provider, query: text, pages: n, unitPrice: price.unit_price };
+}
+
+// Valide une liste de liens soumise : libellé (sert au classement comme une
+// requête), 1 à `maxLinks` liens http(s), doublons retirés, titres facultatifs.
+// La liste se paie d'un bloc : une « page » au prix de `perLink` × liens.
+export function checkLinkList({ query, links }, { perLink, maxLinks }) {
+  const label = typeof query === 'string' ? query.trim().replace(/\s+/g, ' ') : '';
+  if (!label) throw new Error('query requis : libellé de la liste (ex. « Japon, sélection de sources »)');
+  if (label.length > MAX_QUERY_CHARS) throw new Error(`libellé trop long : ${MAX_QUERY_CHARS} caractères au plus`);
+  if (!Array.isArray(links) || links.length === 0) throw new Error('links requis : tableau de liens');
+  const seen = new Set();
+  const clean = [];
+  links.forEach((entry, i) => {
+    const raw = typeof entry === 'string' ? entry : entry?.url;
+    const title = typeof entry === 'object' && entry !== null && entry.title != null ? entry.title : null;
+    if (typeof raw !== 'string' || !raw.trim()) throw new Error(`lien ${i + 1} : URL manquante`);
+    const url = raw.trim();
+    if (url.length > MAX_LINK_CHARS) throw new Error(`lien ${i + 1} : URL de plus de ${MAX_LINK_CHARS} caractères`);
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error(`lien ${i + 1} : URL invalide (${url.slice(0, 80)})`);
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error(`lien ${i + 1} : http ou https seulement`);
+    if (title !== null && (typeof title !== 'string' || title.length > MAX_LINK_TITLE_CHARS)) {
+      throw new Error(`lien ${i + 1} : titre de ${MAX_LINK_TITLE_CHARS} caractères au plus`);
+    }
+    if (seen.has(url)) return;
+    seen.add(url);
+    clean.push({ url, title: title?.trim() || null });
+  });
+  if (clean.length > maxLinks) throw new Error(`${maxLinks} liens au plus par liste (reçu : ${clean.length})`);
+  return { provider: LIST_PROVIDER, query: label, pages: 1, unitPrice: perLink * clean.length, links: clean };
 }

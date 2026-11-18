@@ -1369,7 +1369,7 @@
         }
       },
       "post": {
-        "summary": "Achète une recherche : prix débité d'avance, exécution par la tâche `webpool requests run`, pages non lancées remboursées",
+        "summary": "Achète une recherche, ou soumet une liste de liens (provider list) : prix débité d'avance, examen par la tâche `webpool requests run` (normalize, classify, media, pool), ce qui n'a pas été fait remboursé",
         "tags": [
           "recherches"
         ],
@@ -1904,6 +1904,150 @@
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/requests/{id}/links": {
+      "get": {
+        "summary": "Sort de chaque lien d'une recherche ou d'une liste (auteur, propriétaires de la communauté qui a payé, admin)",
+        "tags": [
+          "recherches"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RequestLink"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/lists": {
+      "post": {
+        "summary": "Envoie une liste de liens (brute ou structurée) : même validation, même prix et même examen qu'une recherche ; les liens valides apportés sont récompensés",
+        "tags": [
+          "recherches"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "comme POST /requests",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,100}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ListInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Liste enregistrée et payée",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListReceipt"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Clé d'idempotence déjà servie : liste existante, rien de débité",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "$ref": "#/components/responses/PaymentRequired"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "description": "Corps de plus de 256 Ko",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Corps autre que application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Trop de recherches en attente ou trop de requêtes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -3170,7 +3314,8 @@
           "prices",
           "personal",
           "communities",
-          "invitations"
+          "invitations",
+          "lists"
         ],
         "properties": {
           "giri_per_eur": {
@@ -3217,6 +3362,39 @@
               "$ref": "#/components/schemas/Invitation"
             },
             "description": "invitations à des communautés, en attente d'acceptation"
+          },
+          "lists": {
+            "type": "object",
+            "required": [
+              "price_per_link",
+              "max_links",
+              "reward_per_link",
+              "reward_domain_cap",
+              "reward_monthly_cap"
+            ],
+            "description": "listes de liens soumises par les membres d'une communauté (provider list)",
+            "properties": {
+              "price_per_link": {
+                "type": "integer",
+                "description": "giri par lien, payés d'un bloc sur le pot de la communauté"
+              },
+              "max_links": {
+                "type": "integer",
+                "description": "liens au plus par liste, doublons retirés"
+              },
+              "reward_per_link": {
+                "type": "integer",
+                "description": "giri gagnés par lien valide apporté (nouveau pour le corpus, entré dans le pool visé), sur le portefeuille personnel ; 0 : aucune récompense"
+              },
+              "reward_domain_cap": {
+                "type": "integer",
+                "description": "liens récompensés au plus par domaine et par membre sur 30 jours"
+              },
+              "reward_monthly_cap": {
+                "type": "integer",
+                "description": "giri de récompense au plus par membre sur 30 jours"
+              }
+            }
           }
         }
       },
@@ -3243,9 +3421,10 @@
               "purchase",
               "debit",
               "refund",
-              "adjustment"
+              "adjustment",
+              "reward"
             ],
-            "description": "donation : don sur un portefeuille personnel ; purchase : apport au pot d'une communauté"
+            "description": "donation : don sur un portefeuille personnel ; purchase : apport au pot d'une communauté ; reward : récompense de liens valides apportés"
           },
           "amount_cents": {
             "type": [
@@ -3308,7 +3487,9 @@
           "error",
           "created_at",
           "started_at",
-          "finished_at"
+          "finished_at",
+          "links",
+          "rewarded"
         ],
         "properties": {
           "id": {
@@ -3404,6 +3585,17 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "links": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "liste de liens : nombre de liens soumis ; null pour une recherche"
+          },
+          "rewarded": {
+            "type": "integer",
+            "description": "giri gagnés par les liens valides de la liste (portefeuille personnel de l'auteur)"
           }
         }
       },
@@ -3421,7 +3613,7 @@
           },
           "provider": {
             "type": "string",
-            "description": "un des providers de `GET /billing`"
+            "description": "un des providers de `GET /billing`, ou `list` pour soumettre une liste de liens"
           },
           "pages": {
             "type": "integer",
@@ -3435,6 +3627,37 @@
           "community": {
             "type": "string",
             "description": "communauté dont le pot paie. Un pool d'une de vos communautés se paie toujours par elle : déduite si une seule communauté possède le pool, obligatoire si plusieurs ; jamais en personnel."
+          },
+          "links": {
+            "type": "array",
+            "maxItems": 1000,
+            "description": "provider `list` seulement : liens à examiner (URL, ou {url, title}) ; http(s), doublons retirés, `max_links` au plus. Pour un membre : réservé aux pools d'une de ses communautés, payé par le pot. Pour un admin sans `community` : gratuit, tout pool. `query` est le libellé de la liste.",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "url"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 300
+                    }
+                  }
+                }
+              ]
+            }
           }
         }
       },
@@ -3799,6 +4022,197 @@
             "type": "string",
             "minLength": 12,
             "maxLength": 200
+          }
+        }
+      },
+      "RequestLink": {
+        "type": "object",
+        "required": [
+          "position",
+          "url",
+          "canonical_url",
+          "domain",
+          "title",
+          "outcome",
+          "known",
+          "error_category",
+          "reward"
+        ],
+        "properties": {
+          "position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "ordre dans la liste soumise, ou rang dans les résultats d'une recherche"
+          },
+          "url": {
+            "type": "string",
+            "description": "URL soumise (liste) ou trouvée (recherche)"
+          },
+          "canonical_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "domain": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "titre de la page lu à la normalisation (il l'emporte sur le titre proposé)"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "examining",
+              "error",
+              "in_pool",
+              "not_in_pool",
+              "in_corpus"
+            ],
+            "description": "queued : liste pas encore ingérée ; examining : en cours de normalisation ou de classement ; in_pool / not_in_pool : classé, entré ou non dans le pool visé (seuils, exclusions) ; in_corpus : classé, sans pool visé"
+          },
+          "known": {
+            "type": "boolean",
+            "description": "URL déjà connue du corpus avant la soumission"
+          },
+          "error_category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "not_found",
+              "host_refused",
+              "http_error",
+              "network",
+              "quarantined",
+              null
+            ],
+            "description": "catégorie d'une erreur ; quarantined : lien mis en quarantaine par le contrôle des liens"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "admin seulement : message brut"
+          },
+          "http_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "admin seulement"
+          },
+          "reward": {
+            "type": "integer",
+            "description": "giri gagnés par ce lien (0 si déjà connu, hors pool, ou au-delà des plafonds)"
+          }
+        }
+      },
+      "ListInput": {
+        "type": "object",
+        "required": [
+          "pool",
+          "label"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "pool": {
+            "type": "string",
+            "description": "pool visé ; pour un membre, un pool d'une de ses communautés (payé par son pot) ; pour un admin sans community, tout pool (gratuit)"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "libellé de la liste : tracé comme requête, il aide le classement"
+          },
+          "text": {
+            "type": "string",
+            "description": "liste brute : une URL par ligne suivie d'un titre facultatif, Markdown ([titre](url), puces), CSV/TSV (colonne URL détectée) ou export de favoris HTML. Exclusif de links."
+          },
+          "links": {
+            "type": "array",
+            "description": "liens structurés, exclusif de text",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "url"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "community": {
+            "type": "string",
+            "description": "communauté dont le pot paie, si plusieurs possèdent le pool"
+          }
+        }
+      },
+      "ListReceipt": {
+        "type": "object",
+        "required": [
+          "request",
+          "balance",
+          "rejected",
+          "duplicates"
+        ],
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/SearchRequest"
+          },
+          "balance": {
+            "type": "integer"
+          },
+          "rejected": {
+            "type": "array",
+            "description": "lignes de `text` ignorées (pas d'URL http(s))",
+            "items": {
+              "type": "object",
+              "required": [
+                "line",
+                "text"
+              ],
+              "properties": {
+                "line": {
+                  "type": "integer"
+                },
+                "text": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "duplicates": {
+            "type": "integer",
+            "description": "doublons retirés de `text`"
           }
         }
       }

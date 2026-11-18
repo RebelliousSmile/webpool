@@ -64,6 +64,22 @@ describe('buildPoolQuery', () => {
     expect(() => buildPoolQuery({ include_requests: 'oui' })).toThrow(/include_requests invalide : un booléen/);
   });
 
+  it('include_requests "only" : uniquement les soumissions qualifiées, critères de sujet ignorés', () => {
+    const { text, values } = buildPoolQuery({ theme: 'ia-generative', min_quality: 0.3, include_requests: 'only', limit: 50 }, { poolId: 9 });
+    expect(text).not.toContain('WITH base');
+    expect(text).not.toContain('ut.is_primary');
+    expect(text).toContain("cp.pool_id IS NOT NULL OR ac.scope = 'admin'");
+    expect(text).toMatch(/ui\.quality_score >= /);
+    expect(values).toContain(9);
+    // chaque paramètre est utilisé : aucun reste du critère de thème
+    const used = new Set([...text.matchAll(/\$(\d+)/g)].map((m) => Number(m[1])));
+    expect(used.size).toBe(values.length);
+    expect(values).not.toContain('ia-generative');
+    // sans pool (validation à la création) : accepté
+    expect(() => buildPoolQuery({ include_requests: 'only' })).not.toThrow();
+    expect(() => buildPoolQuery({ include_requests: 'tout' })).toThrow(/un booléen ou "only"/);
+  });
+
   it('borne la limite à [1, 1000]', () => {
     expect(buildPoolQuery({ limit: 99999 }).values).toContain(1000);
     expect(buildPoolQuery({ limit: 0 }).values).toContain(1);

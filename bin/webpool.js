@@ -23,7 +23,9 @@ import {
   setCommunityPool, setMember, walletEntries, walletOf,
 } from '../src/billing/index.js';
 import { eurosOf, parseEuros } from '../src/billing/pricing.js';
-import { REQUEST_STATUSES, cancelRequest, listRequests, runRequests } from '../src/requests/index.js';
+import { REQUEST_STATUSES, cancelRequest, createRequest, listRequests, runRequests } from '../src/requests/index.js';
+import { parseLinkText } from '../src/requests/links.js';
+import { query as dbQuery } from '../src/db.js';
 
 const HELP = `webpool — pipeline d'URLs : ingestion, normalisation, classification, pools
 
@@ -72,6 +74,9 @@ Usage :
   webpool requests run [--limit N] [--offline]   (recherches payées en attente, puis normalize, classify, media, refresh des pools visés)
   webpool requests list [--status queued|running|done|failed|cancelled]
   webpool requests cancel --id N           (recherche en attente, remboursée)
+  webpool list submit --name <client admin> --pool <pool> --file <liste> --label "…"
+                                          (liste de liens : texte, Markdown, CSV ou favoris HTML ; gratuite pour un admin,
+                                           examinée par requests run comme une recherche)
   webpool billing report [--days N]        (giri crédités et dépensés, coût des providers, marge)
   webpool stats
   webpool migrate                         (applique les migrations db/migrations manquantes)
@@ -459,6 +464,7 @@ ${res.code}`,
           console.log(`#${r.id} : ${r.calls} appel(s), ${r.newUrls} URLs nouvelles${r.refunded ? `, ${r.refunded} giri remboursés` : ''}${r.error ? ` ; erreur : ${r.error}` : ''}`);
         }
         if (res.requests.length === 0) console.log('Aucune recherche en attente.');
+        for (const g of res.rewards ?? []) console.log(`#${g.id} : ${g.links} lien(s) valide(s) récompensé(s), ${g.giri} giri`);
         if (res.processed.length) {
           console.log(`Post-traitement de ${res.processed.length} recherche(s) :`);
           for (const step of res.steps) console.log(`  ${step.name.padEnd(9)} ${step.ok ? 'ok' : 'ÉCHEC'}  ${step.line}`);
@@ -484,6 +490,24 @@ ${res.code}`,
       }
       break;
     }
+    case 'list': {
+      if (subcommand !== 'submit') throw new Error(`Sous-commande list inconnue : ${subcommand ?? '(aucune)'}`);
+      if (!values.name || !values.pool || !values.file || !values.label) {
+        throw new Error('list submit : --name (client admin), --pool, --file et --label requis');
+      }
+      const parsed = parseLinkText(fs.readFileSync(values.file, 'utf8'));
+      for (const r of parsed.rejected) console.log(`ligne ${r.line} ignorée (URL http(s) attendue) : ${r.text}`);
+      const { rows } = await dbQuery(`SELECT id, scope FROM api_client WHERE name = $1 AND revoked_at IS NULL`, [values.name]);
+      if (!rows[0]) throw new Error(`Client inconnu ou révoqué : ${values.name}`);
+      if (rows[0].scope !== 'admin') throw new Error(`list submit : ${values.name} n'est pas admin (les membres soumettent depuis datapool)`);
+      const res = await createRequest({
+        clientId: Number(rows[0].id), isAdmin: true, provider: 'list', query: values.label, pool: values.pool, links: parsed.links,
+      });
+      console.log(
+        `Liste #${res.request.id} : ${res.request.links} liens${parsed.duplicates ? ` (${parsed.duplicates} doublons retirés)` : ''} pour le pool ${values.pool}, examinée au prochain requests run.`,
+      );
+      break;
+    }
     case 'billing': {
       if (subcommand !== 'report') throw new Error(`Sous-commande billing inconnue : ${subcommand ?? '(aucune)'}`);
       const days = parsePositive('days', values.days) ?? 30;
@@ -492,6 +516,7 @@ ${res.code}`,
       for (const c of r.credits) console.log(`  ${c.kind === 'donation' ? 'dons  ' : 'apports'} : ${c.entries}, ${c.eur.toFixed(2)} €, ${c.giri} giri`);
       if (r.credits.length === 0) console.log('  aucun crédit');
       console.log(`  encours : ${r.outstanding.personal} giri personnels, ${r.outstanding.communities} giri de communautés (${r.outstanding.eur.toFixed(2)} €)`);
+      console.log(`  récompenses : ${r.rewards.giri} giri pour ${r.rewards.links} liens valides, ${r.rewards.members} membre(s)`);
       for (const p of r.providers) {
         console.log(`  ${p.provider.padEnd(10)} ${p.requests} recherches, ${p.calls} appels, ${p.giri} giri (${p.revenue_eur.toFixed(2)} €), coût ${p.cost_usd.toFixed(4)} $, marge ${p.margin_eur.toFixed(2)} €`);
       }

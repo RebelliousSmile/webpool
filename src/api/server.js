@@ -53,7 +53,8 @@ export const MAX_BODY_BYTES = 8192;
 const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH']);
 
 // Un POST sans corps (ni Content-Type, ni octet) est accepté : body undefined.
-async function readJson(req) {
+// `maxBytes` : plafond du corps de la route (`route.maxBody`, 8 Ko par défaut).
+async function readJson(req, maxBytes = MAX_BODY_BYTES) {
   const type = req.headers['content-type'];
   const empty = req.headers['content-length'] === '0' || (req.headers['content-length'] === undefined && !req.headers['transfer-encoding']);
   if (type === undefined && empty) return undefined;
@@ -64,7 +65,7 @@ async function readJson(req) {
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) throw new ApiError(413, 'payload_too_large', `Corps limité à ${MAX_BODY_BYTES} octets`);
+    if (size > maxBytes) throw new ApiError(413, 'payload_too_large', `Corps limité à ${maxBytes} octets`);
     chunks.push(chunk);
   }
   let body;
@@ -185,7 +186,7 @@ export function createApiServer({
       // limite des échecs d'authentification de l'IP, chaque échec y compte.
       if (route.credentials && limited(rateLimiter.peek(`auth:${ip}`))) return undefined;
 
-      const body = BODY_METHODS.has(req.method) ? await readJson(req) : undefined;
+      const body = BODY_METHODS.has(req.method) ? await readJson(req, route.maxBody ?? MAX_BODY_BYTES) : undefined;
       const result = await route.handler({ client, params, query: url.searchParams, body, headers: req.headers });
       if (result.raw !== undefined) {
         return send(res, 200, result.raw, {

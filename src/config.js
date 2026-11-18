@@ -93,6 +93,13 @@ export const config = Object.freeze({
     .filter(Boolean),
   requestMaxPages: intEnv('WEBPOOL_REQUEST_MAX_PAGES', 3, 1),
   requestMaxQueued: intEnv('WEBPOOL_REQUEST_MAX_QUEUED', 5, 1),
+  // listes de liens des communautés : giri par lien, liens au plus par liste
+  listPricePerLink: intEnv('WEBPOOL_LIST_PRICE_PER_LINK', 1, 1),
+  listMaxLinks: intEnv('WEBPOOL_LIST_MAX_LINKS', 200, 1),
+  // récompense d'un lien valide apporté par une liste (0 : aucune), plafonds sur 30 jours
+  linkReward: intEnv('WEBPOOL_LINK_REWARD', 2, 0),
+  linkRewardDomainCap: intEnv('WEBPOOL_LINK_REWARD_DOMAIN_CAP', 5, 0),
+  linkRewardMonthlyCap: intEnv('WEBPOOL_LINK_REWARD_MONTHLY_CAP', 1000, 0),
   // crédit minimal en centimes : sous ce montant, les frais fixes de paiement
   // (≈ 0,25 € par transaction) dépassent la marge
   minCreditCents: intEnv('WEBPOOL_MIN_CREDIT_CENTS', 200, 0),
